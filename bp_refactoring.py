@@ -6,14 +6,16 @@ BP Refactoring Tool - Пошаговая обработка Excel файлов
 """
 
 import os
-import sys
 import re
+import sys
+import warnings
 from datetime import datetime
 
 import pandas as pd
 from pandas.errors import EmptyDataError, ParserError
 from openpyxl.utils.exceptions import InvalidFileException
 
+warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 def clear_screen():
     """Очистка экрана консоли"""
