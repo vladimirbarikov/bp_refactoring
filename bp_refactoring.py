@@ -34,6 +34,29 @@ def print_step_header(step_num, total_steps, description):
     print("=" * 60)
 
 
+def save_state_before_step(df):
+    """
+    Сохраняет состояние DataFrame перед выполнением шага
+    Возвращает сохранённую копию DataFrame
+    """
+    if df is not None:
+        print("  [Сохранено состояние перед шагом]")
+        return df.copy(deep=True)
+    return None
+
+
+def restore_state(saved_df, step_name):
+    """
+    Восстанавливает сохранённое состояние DataFrame
+    Возвращает восстановленный DataFrame
+    """
+    if saved_df is not None:
+        print(f"  [Восстанавливаем состояние перед шагом: {step_name}]")
+        return saved_df.copy(deep=True)
+    print("  Ошибка: нет сохранённого состояния для восстановления!")
+    return None
+
+
 def load_excel_file(filename, description="файла"):
     """Загрузка Excel файла с проверкой существования"""
     if not os.path.exists(filename):
@@ -203,11 +226,11 @@ def fill_empty_values_with_dash(df, columns):
             empty_count = empty_mask.sum()
 
             if empty_count > 0:
-                print(f"  Колонка '{col}': ячейки без данных - {empty_count}. Заполняем '-'.")
+                print(f"  Колонка '{col}': ячейки без данных - {empty_count}. Заполнено '-'.")
                 df.loc[empty_mask, col] = '-'
                 columns_with_replacements.append(col)
             else:
-                print(f"  Колонка '{col}': все данные заполнены. Оставляем без изменений.")
+                print(f"  Колонка '{col}': все данные заполнены. Сохранено без изменений.")
         else:
             print(f"  Колонка '{col}': отсутствует в данных.")
 
@@ -246,20 +269,32 @@ def interactive_translation(data, field_name, examples=None):
         for ch, ru in examples.items():
             print(f"     {ch[:50]}... → {ru[:50]}...")
 
+    # Выводим все оригинальные значения перед началом ввода
+    print("\nСписок всех уникальных значений:")
+    print("-" * 60)
+    for i, value in enumerate(data, 1):
+        print(f"  {i}. {value}")
+    print("-" * 60)
+
+    if examples:
+        print("\nПримеры переводов (можно использовать как шаблон):")
+        for ch, ru in examples.items():
+            print(f"     {ch[:50]}... → {ru[:50]}...")
+
     print("\nИнструкция:")
     print("  • Введите перевод и нажмите Enter → оригинальный текст будет заменён на перевод")
     print("  • Нажмите Enter без перевода → текст останется оригинальным (без изменений)")
 
     for i, value in enumerate(data, 1):
         if pd.isna(value) or value == '':
-            translations[value] = value  # оставляем как есть
+            translations[value] = value
             continue
 
         print(f"\n[{i}/{len(data)}] Оригинал: {value}")
         try:
             user_input = input("Введите перевод (или просто Enter чтобы оставить оригинал): ").strip()
         except EOFError:
-            print("\nОбнаружен конец ввода. Оставляем оригинальные значения.")
+            print("\nКонец ввода. Оставляем оригинальные значения.")
             translations[value] = value
             for remaining in data[i:]:
                 translations[remaining] = remaining
@@ -272,11 +307,9 @@ def interactive_translation(data, field_name, examples=None):
             break
 
         if user_input == '':
-            # Пустой ввод - оставляем оригинал
             translations[value] = value
             print(f"  → Оставляем оригинал: {value}")
         else:
-            # Есть перевод - заменяем
             translations[value] = user_input
             print(f"  → Заменяем на: {user_input}")
 
@@ -301,10 +334,10 @@ def find_bp_files():
     return bp_files
 
 
-def confirm_step(step_name):
+def confirm_step(step_name, df_bp_new, saved_state):
     """
     Запрашивает у пользователя подтверждение после выполнения шага
-    Возвращает True если нужно продолжить, False если нужно повторить шаг
+    Возвращает (continue_flag, df, new_saved_state)
     """
     print(f"\n  Шаг '{step_name}' выполнен.")
     user_input = input(
@@ -313,10 +346,17 @@ def confirm_step(step_name):
 
     if user_input == 'retry':
         print(f"Повторяем шаг '{step_name}'...\n")
-        return False
+        restored_df = restore_state(saved_state, step_name)
+        if restored_df is not None:
+            # Возвращаем False и восстановленный DataFrame, состояние не меняем
+            return False, restored_df, saved_state
+        else:
+            return False, df_bp_new, saved_state
     else:
         print("Продолжаем...\n")
-        return True
+        # Сохраняем новое состояние после успешного шага
+        new_saved_state = save_state_before_step(df_bp_new)
+        return True, df_bp_new, new_saved_state
 
 
 def process_bp_file(bp_filename, df_bom):
@@ -326,6 +366,7 @@ def process_bp_file(bp_filename, df_bom):
     print(f"\nОбработка файла: {bp_filename}")
 
     bp_number = bp_filename.replace('.xlsx', '')
+    saved_state = None  # Инициализируем сохранённое состояние
 
     # Шаг 1: Загрузка BP файла
     print_step_header(1, 13, "Загрузка BP файла")
@@ -333,7 +374,12 @@ def process_bp_file(bp_filename, df_bom):
     if df_bp is None:
         return None
     show_dataframe_preview(df_bp, "Загрузка исходного BP файла")
-    if not confirm_step("Загрузка BP файла"):
+
+    # Сохраняем состояние после Шага 1
+    saved_state = save_state_before_step(df_bp)
+
+    continue_flag, df_bp, saved_state = confirm_step("Загрузка BP файла", df_bp, saved_state)
+    if not continue_flag:
         return process_bp_file(bp_filename, df_bom)
 
     # Шаг 2: Выбор нужных колонок
@@ -358,17 +404,16 @@ def process_bp_file(bp_filename, df_bom):
     df_bp_new = df_bp[available_cols].copy()
     df_bp_new['BP_No'] = bp_number
     show_dataframe_preview(df_bp_new, "Выбор нужных колонок")
-    if not confirm_step("Выбор нужных колонок"):
+
+    continue_flag, df_bp_new, saved_state = confirm_step("Выбор нужных колонок", df_bp_new, saved_state)
+    if not continue_flag:
         return process_bp_file(bp_filename, df_bom)
 
     # Шаг 3: Заполнение пустых значений
     print_step_header(3, 13, "Заполнение пустых значений")
-    # Заполняем пустые значения и запоминаем, в каких колонках были замены
     columns_with_replacements = fill_empty_values_with_dash(df_bp_new, available_cols)
 
-    # Определяем колонки для preview: базовые + колонки с заменами
     base_columns = ['BOM Product', 'Part No.', 'Part Name(CHN)']
-    # Объединяем, убираем дубликаты и сохраняем порядок
     preview_columns = []
     for col in base_columns:
         if col in df_bp_new.columns and col not in preview_columns:
@@ -384,7 +429,8 @@ def process_bp_file(bp_filename, df_bom):
         show_dataframe_preview(df_bp_new, "Заполнение пустых значений",
                             focus_columns=['BOM Product', 'Part No.', 'Part Name(CHN)'])
 
-    if not confirm_step("Заполнение пустых значений"):
+    continue_flag, df_bp_new, saved_state = confirm_step("Заполнение пустых значений", df_bp_new, saved_state)
+    if not continue_flag:
         return process_bp_file(bp_filename, df_bom)
 
     # Шаг 4: Перевод названий деталей
@@ -404,12 +450,14 @@ def process_bp_file(bp_filename, df_bom):
             show_dataframe_preview(df_bp_new, "Перевод названий деталей (после)",
                                   focus_columns=['Change', 'BOM Product', 'Part No.', 'Part Name (RUS)'])
 
-        if confirm_step("Перевод названий деталей"):
+        continue_flag, df_bp_new, saved_state = confirm_step("Перевод названий деталей", df_bp_new, saved_state)
+        if continue_flag:
             break
+        # при retry продолжаем цикл с восстановленным состоянием
 
     # Шаг 5: Перевод поставщиков
     while True:
-        print_step_header(5, 13, "Перевод названий поставщиков")
+        print_step_header(5, 13, "Поиск официальных названий поставщиков")
         if 'Supplier Name' in df_bp_new.columns:
             unique_suppliers = get_unique_non_empty_values(df_bp_new['Supplier Name'], 'Supplier Name')
 
@@ -424,7 +472,8 @@ def process_bp_file(bp_filename, df_bom):
             show_dataframe_preview(df_bp_new, "Перевод поставщиков (после)",
                                   focus_columns=['Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Supplier Name (RUS)'])
 
-        if confirm_step("Перевод названий поставщиков"):
+        continue_flag, df_bp_new, saved_state = confirm_step("Поиск официальных названий поставщиков", df_bp_new, saved_state)
+        if continue_flag:
             break
 
     # Шаг 6: Фильтрация китайских символов
@@ -437,7 +486,9 @@ def process_bp_file(bp_filename, df_bom):
         print("  Колонка 'Solution': фильтрация выполнена")
     show_dataframe_preview(df_bp_new, "Фильтрация китайских символов",
                           focus_columns=['Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Change Description', 'Solution'])
-    if not confirm_step("Фильтрация китайских символов"):
+
+    continue_flag, df_bp_new, saved_state = confirm_step("Фильтрация китайских символов", df_bp_new, saved_state)
+    if not continue_flag:
         return process_bp_file(bp_filename, df_bom)
 
     # Шаг 7: Перевод описания
@@ -457,7 +508,8 @@ def process_bp_file(bp_filename, df_bom):
             show_dataframe_preview(df_bp_new, "Перевод описания (после)",
                                   focus_columns=['Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Change Description (RUS)'])
 
-        if confirm_step("Перевод описания изменений"):
+        continue_flag, df_bp_new, saved_state = confirm_step("Перевод описания изменений", df_bp_new, saved_state)
+        if continue_flag:
             break
 
     # Шаг 8: Перевод решения
@@ -477,7 +529,8 @@ def process_bp_file(bp_filename, df_bom):
             show_dataframe_preview(df_bp_new, "Перевод решения (после)",
                                   focus_columns=['Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Solution (RUS)'])
 
-        if confirm_step("Перевод решения"):
+        continue_flag, df_bp_new, saved_state = confirm_step("Перевод решения", df_bp_new, saved_state)
+        if continue_flag:
             break
 
     # Шаг 9: Обработка цветов и Color Code
@@ -515,7 +568,8 @@ def process_bp_file(bp_filename, df_bom):
         show_dataframe_preview(df_bp_new, "Обработка цветов",
                               focus_columns=['Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Color Code', 'Color Name (RUS)'])
 
-        if confirm_step("Обработка цветов и Color Code"):
+        continue_flag, df_bp_new, saved_state = confirm_step("Обработка цветов и Color Code", df_bp_new, saved_state)
+        if continue_flag:
             break
 
     # Шаг 10: Обработка рабочих центров
@@ -534,7 +588,8 @@ def process_bp_file(bp_filename, df_bom):
             show_dataframe_preview(df_bp_new, "Обработка рабочих центров",
                                   focus_columns=['Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Workcenter Name'])
 
-        if confirm_step("Обработка рабочих центров"):
+        continue_flag, df_bp_new, saved_state = confirm_step("Обработка рабочих центров", df_bp_new, saved_state)
+        if continue_flag:
             break
 
     # Шаг 11: Проверка наличия в BOM
@@ -560,7 +615,9 @@ def process_bp_file(bp_filename, df_bom):
 
     show_dataframe_preview(df_bp_new, "Проверка наличия в BOM",
                           focus_columns=['Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Is in BOM'])
-    if not confirm_step("Проверка наличия в BOM"):
+
+    continue_flag, df_bp_new, saved_state = confirm_step("Проверка наличия в BOM", df_bp_new, saved_state)
+    if not continue_flag:
         return process_bp_file(bp_filename, df_bom)
 
     # Шаг 12: Упорядочивание колонок
@@ -582,10 +639,12 @@ def process_bp_file(bp_filename, df_bom):
     df_bp_new = df_bp_new[existing_cols]
     show_dataframe_preview(df_bp_new, "Упорядочивание колонок (финальный результат)",
                           focus_columns=['BP_No', 'Change', 'Part No.', 'Part Name (RUS)', 'Is in BOM'])
-    if not confirm_step("Упорядочивание колонок"):
+
+    continue_flag, df_bp_new, saved_state = confirm_step("Упорядочивание колонок", df_bp_new, saved_state)
+    if not continue_flag:
         return process_bp_file(bp_filename, df_bom)
 
-    # Шаг 13: Сохранение результата
+    # Шаг 13: Сохранение результата (состояние не сохраняем)
     print_step_header(13, 13, "Сохранение результата")
     current_date = datetime.now().strftime('%Y-%m-%d')
     output_filename = f"{current_date}_{bp_number}_refactored.xlsx"
@@ -631,6 +690,9 @@ def main():
         wait_for_user()
         sys.exit(1)
 
+    # Пауза после загрузки BOM файла
+    wait_for_user()
+
     # Этап 2: Поиск BP файлов
     print("\n" + "=" * 60)
     print("ЭТАП 2: Поиск BP файлов")
@@ -647,6 +709,7 @@ def main():
     for i, f in enumerate(bp_files, 1):
         print(f"{i}. {f}")
 
+    # Пауза после поиска всех BP файлов
     wait_for_user()
 
     # Обработка каждого BP файла
