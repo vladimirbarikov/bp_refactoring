@@ -4,18 +4,22 @@
 BP Refactoring Tool - Пошаговая обработка Excel файлов
 Использование: python bp_refactoring.py
 """
-
+import io
 import os
 import re
 import sys
 import warnings
-from datetime import datetime
 
 import pandas as pd
 from pandas.errors import EmptyDataError, ParserError
 from openpyxl.utils.exceptions import InvalidFileException
 
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
+
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 
 def clear_screen():
     """Очистка экрана консоли"""
@@ -24,7 +28,14 @@ def clear_screen():
 
 def wait_for_user(prompt="\nНажмите Enter для продолжения..."):
     """Ожидание нажатия Enter"""
-    input(prompt)
+    try:
+        input(prompt)
+    except KeyboardInterrupt:
+        print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+        sys.exit(0)
+    except EOFError:
+        print("\n\nОбнаружен конец ввода. Программа завершена.")
+        sys.exit(0)
 
 
 def print_step_header(step_num, total_steps, description):
@@ -93,35 +104,6 @@ def load_excel_file(filename, description="файла"):
         print(f"Непредвиденная ошибка при загрузке {description.lower()} '{filename}': {e}")
         print(f"Тип ошибки: {type(e).__name__}")
         return None
-
-
-def save_excel_file(df, filename):
-    """Сохранение Excel файла с проверкой на дубликаты"""
-    if df is None or df.empty:
-        print(f"Внимание: Нет данных для сохранения в {filename}")
-        return False
-
-    if os.path.exists(filename):
-        print(f"Файл {filename} уже существует!")
-        name, ext = filename.rsplit('.', 1)
-        new_filename = f"{name}_v2.{ext}"
-        print(f"Сохраняем как {new_filename}")
-        filename = new_filename
-
-    try:
-        df.to_excel(filename, index=False)
-        print(f"Файл сохранен: {filename}")
-        return True
-    except PermissionError:
-        print(f"Ошибка: Нет прав для записи в файл '{filename}'")
-        print("Закройте файл, если он открыт в Excel, и попробуйте снова.")
-        return False
-    except OSError as e:
-        print(f"Ошибка при сохранении: {e}")
-        return False
-    except Exception as e:
-        print(f"Непредвиденная ошибка при сохранении: {e}")
-        return False
 
 
 def show_dataframe_preview(df, step_name, max_rows=5, focus_columns=None, max_colwidth=40):
@@ -292,19 +274,15 @@ def interactive_translation(data, field_name, examples=None):
 
         print(f"\n[{i}/{len(data)}] Оригинал: {value}")
         try:
-            user_input = input("Введите перевод (или просто Enter чтобы оставить оригинал): ").strip()
-        except EOFError:
-            print("\nКонец ввода. Оставляем оригинальные значения.")
-            translations[value] = value
-            for remaining in data[i:]:
-                translations[remaining] = remaining
-            break
+            user_input = input(
+                "Введите перевод (или просто Enter чтобы оставить оригинал): "
+            ).strip()
         except KeyboardInterrupt:
-            print("\nВвод прерван. Оставляем оригинальные значения.")
-            translations[value] = value
-            for remaining in data[i:]:
-                translations[remaining] = remaining
-            break
+            print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+            sys.exit(0)
+        except EOFError:
+            print("\n\nКонец ввода. Программа завершена.")
+            sys.exit(0)
 
         if user_input == '':
             translations[value] = value
@@ -340,9 +318,16 @@ def confirm_step(step_name, df_bp_new, saved_state):
     Возвращает (continue_flag, df, new_saved_state)
     """
     print(f"\n  Шаг '{step_name}' выполнен.")
-    user_input = input(
-        "\nПроверьте результат. Если всё корректно, нажмите Enter. Если нужно повторить шаг, введите 'retry': "
-    ).strip().lower()
+    try:
+        user_input = input(
+            "\nПроверьте результат. Если всё корректно, нажмите Enter. Если нужно повторить шаг, введите 'retry': "
+        ).strip().lower()
+    except KeyboardInterrupt:
+        print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+        sys.exit(0)
+    except EOFError:
+        print("\n\nОбнаружен конец ввода. Программа завершена.")
+        sys.exit(0)
 
     if user_input == 'retry':
         print(f"Повторяем шаг '{step_name}'...\n")
@@ -357,6 +342,38 @@ def confirm_step(step_name, df_bp_new, saved_state):
         # Сохраняем новое состояние после успешного шага
         new_saved_state = save_state_before_step(df_bp_new)
         return True, df_bp_new, new_saved_state
+
+
+def get_bp_status(bp_number):
+    """
+    Запрашивает у пользователя статус для BP файла
+    Возвращает строку со статусом
+    """
+    print(f"\n  Для BP файла {bp_number} укажите статус обработки:")
+    print("  Доступные варианты:")
+    print("    1 - Согласован\n\t\tApproved")
+    print("    2 - Опубликован\n\t\tPublished")
+    print("    3 - Закрыт\n\t\tClosed")
+    print("    4 - Другое (ввести вручную)")
+
+    while True:
+        try:
+            choice = input("  Ваш выбор (1-4, или Enter для 'Согласован/Approved'): ").strip()
+
+            if choice == '' or choice == '1':
+                return "Согласован\nApproved"
+            elif choice == '2':
+                return "Опубликован\nPublished"
+            elif choice == '3':
+                return "Закрыт\nClosed"
+            elif choice == '4':
+                custom_status = input("  Введите свой статус: ").strip()
+                return custom_status if custom_status else "Согласован\nApproved"
+            else:
+                print("  Неверный выбор. Пожалуйста, введите число от 1 до 4.")
+        except KeyboardInterrupt:
+            print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+            sys.exit(0)
 
 
 def process_bp_file(bp_filename, df_bom):
@@ -403,7 +420,18 @@ def process_bp_file(bp_filename, df_bom):
 
     df_bp_new = df_bp[available_cols].copy()
     df_bp_new['BP_No'] = bp_number
-    show_dataframe_preview(df_bp_new, "Выбор нужных колонок")
+
+    # Запрашиваем статус для BP файла (только один раз для каждого файла)
+    # Проверяем, не задан ли уже статус (например, при retry)
+    if 'Status' not in df_bp_new.columns or df_bp_new['Status'].iloc[0] == '-':
+        status = get_bp_status(bp_number)
+        df_bp_new['Status'] = status
+    else:
+        print(f"  Статус для BP {bp_number} уже задан: {df_bp_new['Status'].iloc[0]}")
+    show_dataframe_preview(
+        df_bp_new, "Выбор нужных колонок",
+        focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Update Type', 'Part No.', 'Part Name(CHN)']
+    )
 
     continue_flag, df_bp_new, saved_state = confirm_step("Выбор нужных колонок", df_bp_new, saved_state)
     if not continue_flag:
@@ -423,13 +451,19 @@ def process_bp_file(bp_filename, df_bom):
             preview_columns.append(col)
 
     if preview_columns:
-        show_dataframe_preview(df_bp_new, "Заполнение пустых значений",
-                            focus_columns=preview_columns)
+        show_dataframe_preview(
+            df_bp_new, "Заполнение пустых значений",
+            focus_columns=preview_columns
+        )
     else:
-        show_dataframe_preview(df_bp_new, "Заполнение пустых значений",
-                            focus_columns=['BOM Product', 'Part No.', 'Part Name(CHN)'])
+        show_dataframe_preview(
+            df_bp_new, "Заполнение пустых значений",
+            focus_columns=['BP_No', 'Status', 'Change','BOM Product', 'Part No.', 'Part Name(CHN)']
+        )
 
-    continue_flag, df_bp_new, saved_state = confirm_step("Заполнение пустых значений", df_bp_new, saved_state)
+    continue_flag, df_bp_new, saved_state = confirm_step(
+        "Заполнение пустых значений", df_bp_new, saved_state
+    )
     if not continue_flag:
         return process_bp_file(bp_filename, df_bom)
 
@@ -447,10 +481,14 @@ def process_bp_file(bp_filename, df_bom):
                 print("  Колонка 'Part Name(CHN)': все значения равны '-' или пустые. Перевод не требуется.")
                 df_bp_new['Part Name (RUS)'] = '-'
                 df_bp_new = df_bp_new.drop(['Part Name(CHN)'], axis=1)
-            show_dataframe_preview(df_bp_new, "Перевод названий деталей (после)",
-                                  focus_columns=['Change', 'BOM Product', 'Part No.', 'Part Name (RUS)'])
+            show_dataframe_preview(
+                df_bp_new, "Перевод названий деталей (после)",
+                focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Part No.', 'Part Name (RUS)']
+            )
 
-        continue_flag, df_bp_new, saved_state = confirm_step("Перевод названий деталей", df_bp_new, saved_state)
+        continue_flag, df_bp_new, saved_state = confirm_step(
+            "Перевод названий деталей", df_bp_new, saved_state
+        )
         if continue_flag:
             break
         # при retry продолжаем цикл с восстановленным состоянием
@@ -469,8 +507,10 @@ def process_bp_file(bp_filename, df_bom):
                 print("  Колонка 'Supplier Name': все значения равны '-' или пустые. Перевод не требуется.")
                 df_bp_new['Supplier Name (RUS)'] = '-'
                 df_bp_new = df_bp_new.drop(['Supplier Name'], axis=1)
-            show_dataframe_preview(df_bp_new, "Перевод поставщиков (после)",
-                                  focus_columns=['Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Supplier Name (RUS)'])
+            show_dataframe_preview(
+                df_bp_new, "Перевод поставщиков (после)",
+                focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Supplier Name (RUS)']
+            )
 
         continue_flag, df_bp_new, saved_state = confirm_step("Поиск официальных названий поставщиков", df_bp_new, saved_state)
         if continue_flag:
@@ -484,8 +524,10 @@ def process_bp_file(bp_filename, df_bom):
     if 'Solution' in df_bp_new.columns:
         df_bp_new['Solution'] = df_bp_new['Solution'].apply(filter_chinese_lines)
         print("  Колонка 'Solution': фильтрация выполнена")
-    show_dataframe_preview(df_bp_new, "Фильтрация китайских символов",
-                          focus_columns=['Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Change Description', 'Solution'])
+    show_dataframe_preview(
+        df_bp_new, "Фильтрация китайских символов",
+        focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Change Description', 'Solution']
+    )
 
     continue_flag, df_bp_new, saved_state = confirm_step("Фильтрация китайских символов", df_bp_new, saved_state)
     if not continue_flag:
@@ -505,8 +547,10 @@ def process_bp_file(bp_filename, df_bom):
                 print("  Колонка 'Change Description': все значения равны '-' или пустые. Перевод не требуется.")
                 df_bp_new['Change Description (RUS)'] = '-'
                 df_bp_new = df_bp_new.drop(['Change Description'], axis=1)
-            show_dataframe_preview(df_bp_new, "Перевод описания (после)",
-                                  focus_columns=['Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Change Description (RUS)'])
+            show_dataframe_preview(
+                df_bp_new, "Перевод описания (после)",
+                focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Change Description (RUS)']
+            )
 
         continue_flag, df_bp_new, saved_state = confirm_step("Перевод описания изменений", df_bp_new, saved_state)
         if continue_flag:
@@ -526,8 +570,10 @@ def process_bp_file(bp_filename, df_bom):
                 print("  Колонка 'Solution': все значения равны '-' или пустые. Перевод не требуется.")
                 df_bp_new['Solution (RUS)'] = '-'
                 df_bp_new = df_bp_new.drop(['Solution'], axis=1)
-            show_dataframe_preview(df_bp_new, "Перевод решения (после)",
-                                  focus_columns=['Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Solution (RUS)'])
+            show_dataframe_preview(
+                df_bp_new, "Перевод решения (после)",
+                focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Solution (RUS)']
+            )
 
         continue_flag, df_bp_new, saved_state = confirm_step("Перевод решения", df_bp_new, saved_state)
         if continue_flag:
@@ -565,8 +611,10 @@ def process_bp_file(bp_filename, df_bom):
             print("  Колонка 'Color Code' отсутствует. Создаём колонку 'Color Code' со значениями '-'.")
             df_bp_new['Color Code'] = '-'
 
-        show_dataframe_preview(df_bp_new, "Обработка цветов",
-                              focus_columns=['Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Color Code', 'Color Name (RUS)'])
+        show_dataframe_preview(
+            df_bp_new, "Обработка цветов",
+            focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Color Code', 'Color Name (RUS)']
+        )
 
         continue_flag, df_bp_new, saved_state = confirm_step("Обработка цветов и Color Code", df_bp_new, saved_state)
         if continue_flag:
@@ -585,8 +633,10 @@ def process_bp_file(bp_filename, df_bom):
                 df_bp_new['Workcenter Name'] = df_bp_new['Workcenter Name'].map(wc_translations).fillna('-')
             else:
                 print("  Все значения рабочих центров равны '-' или пустые. Перевод не требуется.")
-            show_dataframe_preview(df_bp_new, "Обработка рабочих центров",
-                                  focus_columns=['Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Workcenter Name'])
+            show_dataframe_preview(
+                df_bp_new, "Обработка рабочих центров",
+                focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Workcenter Name']
+            )
 
         continue_flag, df_bp_new, saved_state = confirm_step("Обработка рабочих центров", df_bp_new, saved_state)
         if continue_flag:
@@ -613,8 +663,10 @@ def process_bp_file(bp_filename, df_bom):
         df_bp_new['Is in BOM'] = 'Unknown'
         print("  Проверка не выполнена: отсутствуют необходимые колонки или BOM файл")
 
-    show_dataframe_preview(df_bp_new, "Проверка наличия в BOM",
-                          focus_columns=['Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Is in BOM'])
+    show_dataframe_preview(
+        df_bp_new, "Проверка наличия в BOM",
+        focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Is in BOM']
+    )
 
     continue_flag, df_bp_new, saved_state = confirm_step("Проверка наличия в BOM", df_bp_new, saved_state)
     if not continue_flag:
@@ -623,10 +675,11 @@ def process_bp_file(bp_filename, df_bom):
     # Шаг 12: Упорядочивание колонок
     print_step_header(12, 13, "Упорядочивание колонок")
     bp_columns_order = [
-        'BP_No', 'In Stock', 'New Part Available Date', 'BOM Product', 'Change', 'Update Type',
-        'Is in BOM', 'Part No.', 'Part Name (RUS)', 'Workcenter No.', 'Workcenter Name',
-        'Quantity', 'Production Part Disposal', 'Interchangeable', 'Supplier Name (RUS)',
-        'Change Description (RUS)', 'Solution (RUS)', 'Color Code', 'Color Name (RUS)',
+        'BP_No', 'Status', 'In Stock', 'New Part Available Date', 'BOM Product',
+        'Change', 'Update Type', 'Is in BOM', 'Part No.', 'Part Name (RUS)', 
+        'Workcenter No.', 'Workcenter Name', 'Quantity', 'Production Part Disposal',
+        'Interchangeable', 'Supplier Name (RUS)', 'Change Description (RUS)', 'Solution (RUS)',
+        'Color Code', 'Color Name (RUS)',
     ]
 
     existing_cols = [col for col in bp_columns_order if col in df_bp_new.columns]
@@ -637,20 +690,24 @@ def process_bp_file(bp_filename, df_bom):
         print(f"  Отсутствуют в данных: {missing_cols_in_order}")
 
     df_bp_new = df_bp_new[existing_cols]
-    show_dataframe_preview(df_bp_new, "Упорядочивание колонок (финальный результат)",
-                          focus_columns=['BP_No', 'Change', 'Part No.', 'Part Name (RUS)', 'Is in BOM'])
+    show_dataframe_preview(
+        df_bp_new, "Упорядочивание колонок (финальный результат)",
+        focus_columns=['BP_No', 'Status', 'BP_No', 'Change', 'Part No.', 'Part Name (RUS)', 'Is in BOM']
+    )
 
     continue_flag, df_bp_new, saved_state = confirm_step("Упорядочивание колонок", df_bp_new, saved_state)
     if not continue_flag:
         return process_bp_file(bp_filename, df_bom)
 
-    # Шаг 13: Сохранение результата (состояние не сохраняем)
+    # Шаг 13: Сохранение результата
     print_step_header(13, 13, "Сохранение результата")
-    current_date = datetime.now().strftime('%Y-%m-%d')
-    output_filename = f"{current_date}_{bp_number}_refactored.xlsx"
-    save_excel_file(df_bp_new, output_filename)
 
-    return output_filename
+    bp_dataframe = {
+        'bp_number': bp_number,
+        'dataframe': df_bp_new,
+    }
+
+    return bp_dataframe
 
 
 def main():
@@ -713,7 +770,7 @@ def main():
     wait_for_user()
 
     # Обработка каждого BP файла
-    processed_files = []
+    processed_results = {}
 
     for i, bp_file in enumerate(bp_files, 1):
         print("\n" + "=" * 60)
@@ -732,7 +789,7 @@ def main():
 
         result = process_bp_file(bp_file, df_bom)
         if result:
-            processed_files.append(result)
+            processed_results[result['bp_number']] = result['dataframe']
 
         if i < len(bp_files):
             wait_for_user("\nФайл обработан. Нажмите Enter для перехода к следующему файлу...")
@@ -742,10 +799,14 @@ def main():
     print("\n" + "=" * 60)
     print("ОБРАБОТКА ЗАВЕРШЕНА")
     print("=" * 60)
-    print(f"\nОбработано файлов: {len(processed_files)}/{len(bp_files)}")
-    print("\nСозданные файлы:")
-    for f in processed_files:
-        print(f"   - {f}")
+    print(f"\nОбработано файлов: {len(processed_results)}/{len(bp_files)}")
+
+    if processed_results:
+        print("\nОбработанные Breakpoint'ы:")
+        for bp_number in processed_results:
+            print(f"   - {bp_number}")
+    else:
+        print("\nНе обработано ни одного файла.")
 
     print("\nПрограмма завершила работу.")
     wait_for_user("\nНажмите Enter для выхода...")
