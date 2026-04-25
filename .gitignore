@@ -3,6 +3,7 @@ __pycache__/
 
 # Jupyter Notebook
 .ipynb_checkpoints
+*.ipynb
 
 # pyenv
 bp_venv/
@@ -10,3 +11,6 @@ bp_venv/
 # excel source data
 *.xlsx
 *.scv
+
+# python configuration
+.pylintrc
