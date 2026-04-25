@@ -805,11 +805,10 @@ def main():
         print("\nОбработанные Breakpoint'ы:")
         for bp_number in processed_results:
             print(f"   - {bp_number}")
-    else:
-        print("\nНе обработано ни одного файла.")
+        return processed_results
 
-    print("\nПрограмма завершила работу.")
-    wait_for_user("\nНажмите Enter для выхода...")
+    print("\nНе обработано ни одного файла.")
+    return None
 
 
 if __name__ == "__main__":
