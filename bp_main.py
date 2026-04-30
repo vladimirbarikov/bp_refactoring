@@ -11,7 +11,7 @@ from typing import Optional
 import pandas as pd
 
 from bp_refactoring import main as refactoring_main
-from summary_breakpoint_table import main as summary_main
+from bp_summary import main as summary_main
 
 
 def save_excel_file(df: pd.DataFrame, filename: str) -> bool:
