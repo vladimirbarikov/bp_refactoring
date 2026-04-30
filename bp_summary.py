@@ -3,6 +3,7 @@
 """
 Модуль summary_breakpoint_table
 Преобразует обработанные BP DataFrame в итоговый df_summary_breakpoint
+Последовательная обработка каждого BP файла
 """
 
 import os
@@ -12,7 +13,7 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
-# Путь к сетевым папкам с файлами партий (при необходимости можно переопределить)
+# Путь к сетевым папкам с файлами партий (подсказка для пользователя)
 BATCH_FILES_PATH = r'\\hmmr_share\LD\Custom Clearance\Поставки\Серийный KD parts'
 
 # Для Windows консоли
@@ -41,17 +42,9 @@ def wait_for_user(prompt="\nНажмите Enter для продолжения..
 def safe_float_convert(value, default=0.0) -> float:
     """
     Безопасное преобразование значения в float
-    
-    Args:
-        value: значение для преобразования
-        default: значение по умолчанию при ошибке
-    
-    Returns:
-        float - преобразованное значение или default
     """
     if value is None or value == '' or value == '-':
         return default
-
     try:
         return float(value)
     except (ValueError, TypeError):
@@ -61,17 +54,9 @@ def safe_float_convert(value, default=0.0) -> float:
 def safe_str_convert(value, default='') -> str:
     """
     Безопасное преобразование значения в строку
-    
-    Args:
-        value: значение для преобразования
-        default: значение по умолчанию при ошибке
-    
-    Returns:
-        str - преобразованная строка или default
     """
     if value is None:
         return default
-
     try:
         return str(value).strip()
     except (ValueError, TypeError):
@@ -82,7 +67,7 @@ def load_configuration_file(config_filename: str = 'configuration.xlsx') -> Opti
     """Загрузка конфигурационного файла"""
     if not os.path.exists(config_filename):
         print(f"Предупреждение: Файл конфигурации '{config_filename}' не найден")
-        print("Некоторые поля (Quantity batches in SS, Configuration for old parts using out, Transmission) будут пустыми")
+        print("Некоторые поля будут пустыми")
         return None
 
     try:
@@ -94,52 +79,32 @@ def load_configuration_file(config_filename: str = 'configuration.xlsx') -> Opti
         return None
     except PermissionError:
         print(f"Ошибка: Нет прав для чтения файла '{config_filename}'")
-        print("Закройте файл, если он открыт в Excel, и попробуйте снова.")
         return None
     except (pd.errors.EmptyDataError, pd.errors.ParserError) as e:
-        print(f"Ошибка: Файл '{config_filename}' повреждён или имеет неверный формат: {e}")
-        return None
-    except ValueError as e:
-        if "Excel file format cannot be determined" in str(e):
-            print(f"Ошибка: Не удалось определить формат файла '{config_filename}'")
-            print("Убедитесь, что файл имеет расширение .xlsx или .xls")
-        else:
-            print(f"Ошибка при загрузке файла конфигурации: {e}")
-        return None
-    except KeyError as e:
-        print(f"Ошибка: В файле конфигурации отсутствует необходимая колонка: {e}")
-        print("Проверьте, что файл содержит колонки: 'BOM Product', 'Quantity vehicle in batch', 'Batch code', 'Configuration', 'Transmission'")
+        print(f"Ошибка: Файл '{config_filename}' повреждён: {e}")
         return None
     except Exception as e:
-        print(f"Непредвиденная ошибка при загрузке файла конфигурации: {e}")
-        print(f"Тип ошибки: {type(e).__name__}")
+        print(f"Непредвиденная ошибка при загрузке: {e}")
         return None
 
 
 def classify_row_before_after(row: pd.Series) -> str:
     """
     Шаг 1: Классификация детали на 'Before' или 'After'
-    Приоритет 1: колонка 'Change'
-    Приоритет 2: колонка 'Update Type'
-    
     Правила:
     - Delete → всегда Before
     - Add, Replace, Update → требуют анализа пар (Unknown)
     """
-    # Приоритет 1: явное указание в колонке Change
     change_val = safe_str_convert(row.get('Change', ''))
     if change_val == 'Before Change':
         return 'Before'
     elif change_val == 'After Change':
         return 'After'
 
-    # Приоритет 2: анализ Update Type
     update_type = safe_str_convert(row.get('Update Type', ''))
 
-    # Delete всегда Before
     if update_type == 'Delete':
         return 'Before'
-    # Add, Replace, Update требуют поиска пар
     elif update_type in ['Add', 'Replace', 'Update']:
         return 'Unknown'
     else:
@@ -150,7 +115,6 @@ def create_pair_dict(before_row: Optional[pd.Series], after_row: Optional[pd.Ser
     """Создает словарь для одной строки итоговой таблицы из пары Before/After"""
     result = {}
 
-    # Базовые поля (общие для BP)
     source_row = before_row if before_row is not None else after_row
     if source_row is not None:
         result['BP_No'] = source_row.get('BP_No', '')
@@ -243,81 +207,60 @@ def find_pairs(df_bp: pd.DataFrame) -> List[Dict]:
     - Add + Delete → Add = After, Delete = Before
     - Add + Replace → Add = Before, Replace = After
     - Add + Update → Add = Before, Update = After
-    
-    Возвращает список словарей, где каждый словарь - одна строка итоговой таблицы
     """
-    # Сначала классифицируем все строки
     df_bp = df_bp.copy()
     df_bp['_direction'] = df_bp.apply(classify_row_before_after, axis=1)
 
-    # Delete строки сразу идут в Before
     before_rows = df_bp[df_bp['_direction'] == 'Before'].copy()
-    # После обработки Unknown, After строки будут собираться сюда
     after_rows = pd.DataFrame()
-    
-    # Все строки, требующие анализа (Add, Replace, Update)
     unknown_rows = df_bp[df_bp['_direction'] == 'Unknown'].copy()
-    
-    # Временные хранилища для Add, которые станут Before
+
     add_as_before = []
-    # Временные хранилища для остальных
     temp_after = []
 
-    # Проходим по всем Unknown строкам для определения их роли
     for _, unknown in unknown_rows.iterrows():
         update_type = safe_str_convert(unknown.get('Update Type', ''))
         part_name = safe_str_convert(unknown.get('Part Name (RUS)', ''))
-        
+
         if update_type == 'Add':
-            # Проверяем, есть ли Delete с таким же Part Name
             match_delete = before_rows[
                 before_rows['Part Name (RUS)'].astype(str).str.strip() == part_name
             ]
             if not match_delete.empty:
-                # Add + Delete → Add = After, Delete уже в before_rows
                 temp_after.append(unknown)
                 continue
-            
-            # Проверяем, есть ли Replace или Update с таким же Part Name
+
             match_replace_update = unknown_rows[
                 (unknown_rows['Update Type'].isin(['Replace', 'Update'])) &
                 (unknown_rows['Part Name (RUS)'].astype(str).str.strip() == part_name)
             ]
             if not match_replace_update.empty:
-                # Add + Replace/Update → Add = Before
                 add_as_before.append(unknown)
             else:
-                # Add без пары → After
                 temp_after.append(unknown)
-        
+
         elif update_type in ['Replace', 'Update']:
-            # Проверяем, есть ли Add с таким же Part Name
             match_add = unknown_rows[
                 (unknown_rows['Update Type'] == 'Add') &
                 (unknown_rows['Part Name (RUS)'].astype(str).str.strip() == part_name)
             ]
             if not match_add.empty:
-                # Replace/Update с парой Add → After
                 temp_after.append(unknown)
             else:
-                # Replace/Update без пары (по правилам не должно быть, но на всякий случай - After)
                 temp_after.append(unknown)
 
-    # Добавляем Add как Before (для пар с Replace/Update)
     if add_as_before:
         add_before_df = pd.DataFrame(add_as_before)
-        # Удаляем колонку _direction, если она есть
         if '_direction' in add_before_df.columns:
             add_before_df = add_before_df.drop(columns=['_direction'])
         before_rows = pd.concat([before_rows, add_before_df], ignore_index=True)
 
-    # Формируем after_rows
     if temp_after:
         after_rows = pd.DataFrame(temp_after)
         if '_direction' in after_rows.columns:
             after_rows = after_rows.drop(columns=['_direction'])
 
-    # Создаем пары Before-After
+    # Создаем пары
     pairs = []
     used_before = set()
     used_after = set()
@@ -327,15 +270,12 @@ def find_pairs(df_bp: pd.DataFrame) -> List[Dict]:
         before_part_no = safe_str_convert(before_row.get('Part No.', ''))
         if before_part_no == '' or before_part_no == '-':
             continue
-
         if after_rows.empty:
             break
-
         matches = after_rows[
             (after_rows['Part No.'].astype(str).str.strip() == before_part_no) &
             (after_rows.index not in used_after)
         ]
-
         for _, after_row in matches.iterrows():
             pairs.append(create_pair_dict(before_row, after_row))
             used_before.add(before_row.name)
@@ -346,32 +286,28 @@ def find_pairs(df_bp: pd.DataFrame) -> List[Dict]:
     for _, before_row in before_rows.iterrows():
         if before_row.name in used_before:
             continue
-
         before_part_name = safe_str_convert(before_row.get('Part Name (RUS)', ''))
         if before_part_name == '' or before_part_name == '-':
             continue
-
         if after_rows.empty:
             break
-
         matches = after_rows[
             (after_rows['Part Name (RUS)'].astype(str).str.strip() == before_part_name) &
             (after_rows.index not in used_after)
         ]
-
         for _, after_row in matches.iterrows():
             pairs.append(create_pair_dict(before_row, after_row))
             used_before.add(before_row.name)
             used_after.add(after_row.name)
             break
 
-    # Обрабатываем Before без пары
+    # Before без пары
     for _, before_row in before_rows.iterrows():
         if before_row.name not in used_before:
             pairs.append(create_pair_dict(before_row, None))
             used_before.add(before_row.name)
 
-    # Обрабатываем After без пары
+    # After без пары
     if not after_rows.empty:
         for _, after_row in after_rows.iterrows():
             if after_row.name not in used_after:
@@ -381,78 +317,62 @@ def find_pairs(df_bp: pd.DataFrame) -> List[Dict]:
     return pairs
 
 
-def user_input_batch_fact_and_change_date(df_summary: pd.DataFrame) -> pd.DataFrame:
+def user_input_for_single_bp(df_current: pd.DataFrame, bp_number: str) -> pd.DataFrame:
     """
-    Интерактивный ввод Batch fact и Change Date для каждой строки
+    Интерактивный ввод Batch fact и Change Date для одного BP файла
     """
-    print("\n" + "=" * 60)
-    print("ВВОД ДАННЫХ: Batch fact и Change Date")
-    print("=" * 60)
-    print("Для каждой строки BP можно указать:")
-    print("  - Batch fact (фактическая партия)")
-    print("  - Change Date (дата изменения)")
-    print("Если данные неизвестны - оставьте поле пустым и нажмите Enter")
+    print(f"\n--- Ввод данных для BP {bp_number} ---")
+    print(f"Всего строк для обработки: {len(df_current)}")
 
-    df_result = df_summary.copy()
+    df_result = df_current.copy()
+    total_rows = len(df_result)
 
-    for idx, row in df_result.iterrows():
-        bp_no = safe_str_convert(row.get('BP_No', ''))
+    for counter, (idx, row) in enumerate(df_result.iterrows(), start=1):
         bom_product = safe_str_convert(row.get('BOM Product', ''))
+        part_no_before = safe_str_convert(row.get('Part No. Before', ''))
         part_no_after = safe_str_convert(row.get('Part No. After', ''))
 
-        print(f"\n--- BP: {bp_no} | BOM Product: {bom_product} | Part No. After: {part_no_after} ---")
+        print(f"\n[{counter}/{total_rows}] BOM: {bom_product}")
+        print(f"  Before: {part_no_before}")
+        print(f"  After: {part_no_after}")
 
         # Batch fact
         current_batch_fact = safe_str_convert(row.get('Batch fact', ''))
-        print(f"Текущее Batch fact: {current_batch_fact if current_batch_fact else '(пусто)'}")
-        user_input = input("Введите Batch fact (или Enter чтобы оставить пустым): ").strip()
+        user_input = input(f"  Batch fact [{current_batch_fact if current_batch_fact else 'пусто'}]: ").strip()
         if user_input:
             df_result.at[idx, 'Batch fact'] = user_input
 
         # Change Date
         current_change_date = safe_str_convert(row.get('Change Date', ''))
-        print(f"Текущее Change Date: {current_change_date if current_change_date else '(пусто)'}")
-        user_input = input("Введите Change Date (формат ГГГГ-ММ-ДД или Enter): ").strip()
+        user_input = input(f"  Change Date (ГГГГ-ММ-ДД) [{current_change_date if current_change_date else 'пусто'}]: ").strip()
         if user_input:
             df_result.at[idx, 'Change Date'] = user_input
 
     return df_result
 
 
-def config_lookup(df_summary: pd.DataFrame, df_config: Optional[pd.DataFrame]) -> pd.DataFrame:
+def config_lookup_for_single_bp(df_current: pd.DataFrame, df_config: Optional[pd.DataFrame]) -> pd.DataFrame:
     """
-    Поиск значений в конфигурационном файле:
-    - Quantity batches in SS
-    - Configuration for old parts using out
-    - Batches for old parts using out
-    - Transmission
+    Поиск значений в конфигурационном файле для одного BP файла
     """
     if df_config is None or df_config.empty:
-        print("\nКонфигурационный файл не загружен. Пропускаем поиск значений.")
-        return df_summary
+        print("  Конфигурационный файл не загружен. Пропускаем поиск.")
+        return df_current
 
-    print("\n" + "=" * 60)
-    print("ПОИСК ЗНАЧЕНИЙ В КОНФИГУРАЦИОННОМ ФАЙЛЕ")
-    print("=" * 60)
+    df_result = df_current.copy()
 
-    df_result = df_summary.copy()
-
-    # Проверка наличия необходимых колонок в df_config
-    required_config_cols = ['BOM Product', 'Quantity vehicle in batch']
-    optional_config_cols = ['Batch code', 'Configuration', 'Transmission']
-
-    missing_cols = [col for col in required_config_cols if col not in df_config.columns]
-    if missing_cols:
-        print(f"Ошибка: В конфигурационном файле отсутствуют обязательные колонки: {missing_cols}")
-        print("Поиск значений отменён.")
+    # Проверка наличия необходимых колонок
+    if 'BOM Product' not in df_config.columns or 'Quantity vehicle in batch' not in df_config.columns:
+        print("  Ошибка: В конфигурационном файле отсутствуют обязательные колонки")
         return df_result
 
-    # Приводим колонки df_config к строковому типу (только если они существуют)
     df_config['BOM Product'] = df_config['BOM Product'].astype(str).str.strip()
-
-    for col in optional_config_cols:
-        if col in df_config.columns:
-            df_config[col] = df_config[col].astype(str).str.strip()
+    if 'Batch code' in df_config.columns:
+        df_config['Batch code'] = df_config['Batch code'].astype(str).str.strip()
+    if 'Configuration' in df_config.columns:
+        df_config['Configuration'] = df_config['Configuration'].astype(str).str.strip()
+    if 'Transmission' in df_config.columns:
+        df_config['Transmission'] = df_config['Transmission'].astype(str).str.strip()
 
     for idx, row in df_result.iterrows():
         bom_product = safe_str_convert(row.get('BOM Product', ''))
@@ -461,86 +381,58 @@ def config_lookup(df_summary: pd.DataFrame, df_config: Optional[pd.DataFrame]) -
         if bom_product == '' or bom_product == '-':
             continue
 
-        # Поиск всех строк с таким BOM Product
         config_matches = df_config[df_config['BOM Product'] == bom_product]
-
         if config_matches.empty:
             continue
 
-        # 1. Quantity vehicle in batch (берем первое значение)
+        # Quantity batches in SS
         quantity_vehicle_in_batch = config_matches.iloc[0].get('Quantity vehicle in batch')
         quantity_in_ss = row.get('Quantity in SS', 0)
 
-        # Используем safe_float_convert
         qty_in_ss = safe_float_convert(quantity_in_ss, 0.0)
         qty_vehicle = safe_float_convert(quantity_vehicle_in_batch, 1.0)
 
         if qty_vehicle > 0:
             qty_batches = round(qty_in_ss / qty_vehicle, 2)
             df_result.at[idx, 'Quantity batches in SS'] = qty_batches
-            print(f"  {bom_product}: Quantity batches in SS = {qty_batches} (={qty_in_ss}/{qty_vehicle})")
-        elif qty_vehicle == 0:
-            print(f"  Предупреждение: Quantity vehicle in batch для {bom_product} = 0 (деление на ноль)")
+            print(f"  {bom_product}: Quantity batches in SS = {qty_batches}")
 
-        # 2. Поиск по Batch fact (только если есть колонки Batch code, Configuration, Transmission)
+        # Поиск по Batch fact
         if batch_fact and batch_fact != '' and batch_fact != '-':
             if 'Batch code' in df_config.columns and 'Configuration' in df_config.columns:
-                # Извлекаем первые 3 символа Batch fact для поиска
                 batch_prefix = batch_fact[:3] if len(batch_fact) >= 3 else batch_fact
-
-                # Ищем по BOM Product и Batch code (первые 3 символа)
                 config_match = config_matches[
                     config_matches['Batch code'].str.startswith(batch_prefix, na=False)
                 ]
-
                 if not config_match.empty:
-                    # Configuration for old parts using out
                     config_value = safe_str_convert(config_match.iloc[0].get('Configuration', ''))
-                    if config_value and config_value != '' and config_value != 'nan':
+                    if config_value and config_value != 'nan':
                         df_result.at[idx, 'Configuration for old parts using out'] = config_value
 
-                    # Batches for old parts using out
                     if 'Batch code' in df_config.columns:
                         batch_code_value = safe_str_convert(config_match.iloc[0].get('Batch code', ''))
-                        if batch_code_value and batch_code_value != '' and batch_code_value != 'nan':
+                        if batch_code_value and batch_code_value != 'nan':
                             df_result.at[idx, 'Batches for old parts using out'] = batch_code_value
 
-                    # Transmission
                     if 'Transmission' in df_config.columns:
                         transmission_value = safe_str_convert(config_match.iloc[0].get('Transmission', ''))
-                        if transmission_value and transmission_value != '' and transmission_value != 'nan':
+                        if transmission_value and transmission_value != 'nan':
                             df_result.at[idx, 'Transmission'] = transmission_value
 
-                    print(f"  {bom_product} | Batch fact: {batch_fact} → найдена конфигурация")
-                else:
-                    print(f"  {bom_product} | Batch fact: {batch_fact} → конфигурация не найдена")
-            else:
-                print("  Предупреждение: В конфигурационном файле отсутствуют колонки 'Batch code' или 'Configuration'")
+                    print(f"  Найдена конфигурация для {batch_fact}")
 
     return df_result
 
 
 def load_batch_file(batch_name: str, search_path: str = BATCH_FILES_PATH) -> Optional[pd.DataFrame]:
-    """
-    Загрузка Excel файла партии
-    
-    Args:
-        batch_name: название партии (например, 'RKV2029')
-        search_path: путь к папке с файлами партий
-    
-    Returns:
-        DataFrame с данными партии или None
-    """
+    """Загрузка Excel файла партии (заглушка, будет реализована позже)"""
     batch_name = safe_str_convert(batch_name)
-
     if not batch_name or batch_name == '' or batch_name == '-':
-        print("  Пропуск: название партии не указано")
         return None
 
-    # Генерация имени файла: '2029 RKV.xlsx' из 'RKV2029'
     if len(batch_name) >= 4:
-        file_number = batch_name[3:]  # '2029' из 'RKV2029'
-        file_prefix = batch_name[:3]   # 'RKV' из 'RKV2029'
+        file_number = batch_name[3:]
+        file_prefix = batch_name[:3]
         filename = f"{file_number} {file_prefix}.xlsx"
     else:
         filename = f"{batch_name}.xlsx"
@@ -548,12 +440,12 @@ def load_batch_file(batch_name: str, search_path: str = BATCH_FILES_PATH) -> Opt
     full_path = os.path.join(search_path, filename)
 
     if not os.path.exists(full_path):
-        print(f"  Файл партии не найден: {full_path}")
+        print(f"  Файл не найден: {full_path}")
         return None
 
     try:
         df_batch = pd.read_excel(full_path)
-        print(f"  Файл партии загружен: {filename} ({df_batch.shape[0]} строк)")
+        print(f"  Файл загружен: {filename}")
         return df_batch
     except FileNotFoundError:
         print(f"  Ошибка: Файл '{full_path}' не найден")
@@ -563,107 +455,136 @@ def load_batch_file(batch_name: str, search_path: str = BATCH_FILES_PATH) -> Opt
         print("  Закройте файл, если он открыт в Excel, и попробуйте снова.")
         return None
     except (pd.errors.EmptyDataError, pd.errors.ParserError) as e:
-        print(f"  Ошибка: Файл '{filename}' повреждён: {e}")
+        print(f"  Ошибка: Файл '{filename}' повреждён или имеет неверный формат: {e}")
+        return None
+    except ValueError as e:
+        if "Excel file format cannot be determined" in str(e):
+            print(f"  Ошибка: Не удалось определить формат файла '{filename}'")
+            print("  Убедитесь, что файл имеет расширение .xlsx или .xls")
+        else:
+            print(f"  Ошибка при загрузке файла '{filename}': {e}")
         return None
     except Exception as e:
         print(f"  Непредвиденная ошибка при загрузке файла '{filename}': {e}")
+        print(f"  Тип ошибки: {type(e).__name__}")
         return None
 
 
-def batch_file_loader_placeholder(df_summary: pd.DataFrame) -> pd.DataFrame:
+def batch_file_loader_for_single_bp(df_current: pd.DataFrame) -> pd.DataFrame:
     """
-    Загрузка Excel файлов партий для заполнения информации о коробках и паллетах
-    
-    Логика работы (будет реализована позже):
-    1. Для каждой строки в df_summary проверяем наличие Batch fact
-    2. Если Batch fact заполнен, вызываем load_batch_file() для загрузки файла партии
-    3. Из загруженного файла извлекаем:
-       - Quantity per Box Before/After
-       - Box Before/After (L-W-H) mm
-       - Pallet Before/After (L-W-H) mm
-    4. Заполняем соответствующие колонки в df_summary
-    
-    Формат файлов партий:
-    - Имя файла: '{номер} {префикс}.xlsx' (например, '2029 RKV.xlsx' для партии 'RKV2029')
-    - Путь: \\hmmr_share\LD\Custom Clearance\Поставки\Серийный KD parts
-    
-    TODO: Реализовать парсинг структуры Excel файла партии:
-    - Определить, на каких листах и в каких колонках находятся данные
-    - Связать детали Before/After с данными из файла
-    - Заполнить целевые колонки
-    
-    P.S. Этот функционал будет реализован после получения образцов файлов партий
+    Загрузка файлов партий для одного BP файла (заглушка)
+    TODO: Реализовать после получения образцов файлов
     """
-    print("\n" + "=" * 60)
-    print("ЗАГРУЗКА ФАЙЛОВ ПАРТИЙ")
-    print("=" * 60)
-    print("ВНИМАНИЕ: Этот функционал находится в разработке.")
-    print("На данном этапе выполняется только проверка наличия файлов партий.")
-    print("Поля 'Quantity per Box', 'Box (L-W-H) mm', 'Pallet (L-W-H) mm' будут пустыми.")
-    print("Вы сможете заполнить их позже в Excel файле.\n")
+    print("\n  Проверка файлов партий...")
+    print("  ВНИМАНИЕ: Функционал в разработке. Поля останутся пустыми.")
 
-    df_result = df_summary.copy()
+    df_result = df_current.copy()
 
-    # Проверяем наличие Batch fact и пытаемся загрузить файлы
     for _, row in df_result.iterrows():
         batch_fact = safe_str_convert(row.get('Batch fact', ''))
-        bp_no = safe_str_convert(row.get('BP_No', ''))
-
         if batch_fact and batch_fact != '' and batch_fact != '-':
-            print(f"Проверка файла для партии: {batch_fact}")
+            print(f"    Проверка партии: {batch_fact}")
             df_batch = load_batch_file(batch_fact)
-
             if df_batch is not None:
-                print(f"  → Файл партии '{batch_fact}' успешно загружен")
-                # TODO: Здесь будет логика извлечения данных из df_batch
-                # и заполнения колонок:
-                # - Quantity per Box Before/After
-                # - Box Before/After (L-W-H) mm
-                # - Pallet Before/After (L-W-H) mm
-            else:
-                print(f"  → Файл для партии '{batch_fact}' не найден или не может быть загружен")
-        else:
-            print(f"Пропуск: для BP {bp_no} не указан Batch fact")
-
-    print("\n" + "=" * 60)
-    print("Завершена проверка файлов партий.")
-    print("Для заполнения данных о коробках и паллетах используйте Excel файл.")
-    print("=" * 60)
+                print("      Файл загружен (TODO: извлечение данных)")
 
     return df_result
 
 
-def create_summary_breakpoint_table(
-    processed_results: Dict[str, pd.DataFrame]
+def process_single_bp(
+    bp_number: str,
+    df_bp: pd.DataFrame,
+    df_config: Optional[pd.DataFrame],
+    interactive: bool = True
 ) -> pd.DataFrame:
     """
-    Основная функция: создает итоговый df_summary_breakpoint из processed_results
-    
-    Args:
-        processed_results: словарь вида {bp_number: dataframe} из bp_refactoring
-    
-    Returns:
-        pd.DataFrame - итоговая таблица summary_breakpoint
+    Обработка одного BP файла:
+    1. Поиск пар Before/After
+    2. Пользовательский ввод
+    3. Поиск в конфигурации
+    4. Загрузка файлов партий
     """
-    all_pairs = []
+    print(f"\n{'=' * 60}")
+    print(f"ОБРАБОТКА BP: {bp_number}")
+    print(f"{'=' * 60}")
 
+    # Шаг 1: Поиск пар
+    print("\n[1/4] Поиск пар Before/After...")
+    pairs = find_pairs(df_bp)
+    print(f"  Найдено пар/строк: {len(pairs)}")
+
+    if not pairs:
+        print(f"  Предупреждение: Для {bp_number} не найдено пар!")
+        return pd.DataFrame()
+
+    df_current = pd.DataFrame(pairs)
+
+    # Шаг 2: Пользовательский ввод
+    if interactive:
+        print("\n[2/4] Ввод данных пользователем...")
+        df_current = user_input_for_single_bp(df_current, bp_number)
+
+    # Шаг 3: Поиск в конфигурации
+    print("\n[3/4] Поиск в конфигурационном файле...")
+    df_current = config_lookup_for_single_bp(df_current, df_config)
+
+    # Шаг 4: Загрузка файлов партий
+    print("\n[4/4] Проверка файлов партий...")
+    df_current = batch_file_loader_for_single_bp(df_current)
+
+    print(f"\n  BP {bp_number} обработан. Добавлено строк: {len(df_current)}")
+
+    return df_current
+
+
+def main(processed_results: Dict[str, pd.DataFrame], interactive: bool = True) -> pd.DataFrame:
+    """
+    Главная функция модуля summary_breakpoint_table
+    Последовательная обработка каждого BP файла
+    """
+    clear_screen()
+
+    print("""
+        ╔══════════════════════════════════════════════════════════════╗
+        ║           SUMMARY BREAKPOINT TABLE GENERATOR v1.0            ║
+        ║        Формирование итоговой таблицы из BP файлов            ║
+        ╚══════════════════════════════════════════════════════════════╝
+        """)
+
+    print(f"Найдено BP файлов для обработки: {len(processed_results)}")
+
+    # Загрузка конфигурационного файла (один раз для всех)
     print("\n" + "=" * 60)
-    print("ОБРАБОТКА BP ФАЙЛОВ ДЛЯ SUMMARY BREAKPOINT")
+    print("ЗАГРУЗКА КОНФИГУРАЦИОННОГО ФАЙЛА")
     print("=" * 60)
+    df_config = load_configuration_file('configuration.xlsx')
+    wait_for_user()
 
-    for bp_number, df_bp in processed_results.items():
-        print(f"\nОбработка: {bp_number} ({len(df_bp)} строк)")
+    # Список для сбора обработанных DataFrame
+    all_processed_dfs = []
+    bp_list = list(processed_results.items())
 
-        # Находим пары Before/After
-        pairs = find_pairs(df_bp)
-        print(f"  Найдено пар/строк: {len(pairs)}")
+    # Последовательная обработка каждого BP
+    for i, (bp_number, df_bp) in enumerate(bp_list, 1):
+        print(f"\n{'=' * 60}")
+        print(f"BP {i}/{len(bp_list)}: {bp_number}")
+        print(f"{'=' * 60}")
 
-        all_pairs.extend(pairs)
+        df_processed = process_single_bp(bp_number, df_bp, df_config, interactive)
 
-    # Создаем DataFrame из пар
-    df_summary = pd.DataFrame(all_pairs)
+        if not df_processed.empty:
+            all_processed_dfs.append(df_processed)
 
-    # Упорядочиваем колонки согласно спецификации
+        if i < len(bp_list):
+            wait_for_user("\nНажмите Enter для обработки следующего BP...")
+
+    # Объединение всех результатов
+    if all_processed_dfs:
+        df_summary = pd.concat(all_processed_dfs, ignore_index=True)
+    else:
+        df_summary = pd.DataFrame()
+
+    # Упорядочивание колонок
     column_order = [
         'BP_No', 'Status', 'Batch plan', 'New Part Available Date', 'Batch fact',
         'Change Date', 'BOM Product', 'Part No. Before', 'Part Name Before',
@@ -679,92 +600,24 @@ def create_summary_breakpoint_table(
         'Color Code', 'Color Name (RUS)'
     ]
 
-    # Добавляем отсутствующие колонки
     for col in column_order:
         if col not in df_summary.columns:
             df_summary[col] = ''
 
     df_summary = df_summary[column_order]
 
-    return df_summary
-
-
-def main(processed_results: Dict[str, pd.DataFrame], interactive: bool = True) -> pd.DataFrame:
-    """
-    Главная функция модуля summary_breakpoint_table
-    
-    Args:
-        processed_results: словарь из bp_refactoring (bp_number -> dataframe)
-        interactive: если True, запрашивает пользовательский ввод
-    
-    Returns:
-        pd.DataFrame - итоговый df_summary_breakpoint
-    """
-    clear_screen()
-
-    print("""
-        ╔══════════════════════════════════════════════════════════════╗
-        ║           SUMMARY BREAKPOINT TABLE GENERATOR v1.0            ║
-        ║        Формирование итоговой таблицы из BP файлов            ║
-        ╚══════════════════════════════════════════════════════════════╝
-        """)
-
-    print(f"Найдено BP файлов для обработки: {len(processed_results)}")
-
-    # Шаг 1: Загрузка конфигурационного файла
-    print("\n" + "=" * 60)
-    print("ШАГ 1: Загрузка конфигурационного файла")
-    print("=" * 60)
-    df_config = load_configuration_file('configuration.xlsx')
-    wait_for_user()
-
-    # Шаг 2: Создание базовой таблицы (поиск пар Before/After)
-    print("\n" + "=" * 60)
-    print("ШАГ 2: Создание базовой таблицы summary_breakpoint")
-    print("=" * 60)
-    df_summary = create_summary_breakpoint_table(processed_results)
-    print(f"\nСоздана таблица: {df_summary.shape[0]} строк × {df_summary.shape[1]} колонок")
-    wait_for_user()
-
-    # Шаг 3: Пользовательский ввод Batch fact и Change Date
-    if interactive:
-        print("\n" + "=" * 60)
-        print("ШАГ 3: Ввод данных пользователем")
-        print("=" * 60)
-        df_summary = user_input_batch_fact_and_change_date(df_summary)
-        wait_for_user()
-
-    # Шаг 4: Поиск в конфигурационном файле
-    print("\n" + "=" * 60)
-    print("ШАГ 4: Поиск значений в конфигурационном файле")
-    print("=" * 60)
-    df_summary = config_lookup(df_summary, df_config)
-    wait_for_user()
-
-    # Шаг 5: Загрузка файлов партий (заглушка)
-    print("\n" + "=" * 60)
-    print("ШАГ 5: Загрузка файлов партий")
-    print("=" * 60)
-    df_summary = batch_file_loader_placeholder(df_summary)
-    wait_for_user()
-
     # Итоги
     clear_screen()
     print("\n" + "=" * 60)
     print("ИТОГОВАЯ ТАБЛИЦА SUMMARY BREAKPOINT")
     print("=" * 60)
-    print(f"Сформировано строк: {len(df_summary)}")
+    print(f"Обработано BP файлов: {len(all_processed_dfs)}/{len(processed_results)}")
+    print(f"Всего строк в итоговой таблице: {len(df_summary)}")
     print(f"Колонок: {len(df_summary.columns)}")
 
     return df_summary
 
 
-# Пример использования при запуске модуля напрямую
 if __name__ == "__main__":
-    # Этот блок будет использоваться для тестирования
-    # В реальной жизни processed_results приходит из bp_refactoring
-
-    print("Этот модуль предназначен для импорта из bp_refactoring")
-    print("Использование:")
-    print("  from summary_breakpoint_table import main")
-    print("  df_summary = main(processed_results)")
+    print("Этот модуль предназначен для импорта из bp_main")
+    print("Использование: from bp_summary import main")
