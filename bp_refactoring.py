@@ -376,6 +376,60 @@ def get_bp_status(bp_number):
             sys.exit(0)
 
 
+def get_quantity_in_ss(df_bp_new, bp_number):
+    """
+    Запрашивает у пользователя количество для каждой уникальной детали
+    Возвращает словарь {Part No.: количество}
+    """
+    print(f"\n  Ввод количества деталей в SS для BP {bp_number}")
+    print("  Для каждой уникальной детали нужно указать количество в SS.")
+    print("  Если количество неизвестно - нажмите Enter, будет установлено 0.")
+    print("-" * 60)
+
+    # Получаем уникальные детали (без дубликатов)
+    # Используем Part No. как идентификатор
+    unique_parts = df_bp_new[['Part No.', 'Part Name(CHN)']].drop_duplicates(subset=['Part No.'])
+    quantity_dict = {}
+
+    for _, row in unique_parts.iterrows():
+        part_no = row.get('Part No.', '')
+        part_name = row.get('Part Name(CHN)', '')
+
+        # Проверяем на пустые значения
+        if pd.isna(part_no) or part_no == '' or part_no == '-':
+            continue
+
+        # Преобразуем в строку для безопасности
+        part_no = str(part_no)
+        part_name = str(part_name) if not pd.isna(part_name) else ''
+
+        print(f"\n  Деталь: {part_no}")
+        print(f"  Название: {part_name[:50] + '...' if len(part_name) > 50 else part_name}")
+
+        while True:
+            try:
+                user_input = input("  Введите количество в SS (целое число, или Enter для 0): ").strip()
+
+                if user_input == '':
+                    quantity = 0
+                    break
+                else:
+                    quantity = int(user_input)
+                    if quantity < 0:
+                        print("  Количество не может быть отрицательным. Попробуйте снова.")
+                        continue
+                    break
+            except ValueError:
+                print("  Ошибка: Введите целое число или нажмите Enter.")
+                continue
+
+        quantity_dict[part_no] = quantity
+        print(f"    → Установлено количество: {quantity}")
+
+    print("\n  Ввод количества завершён.")
+    return quantity_dict
+
+
 def process_bp_file(bp_filename, df_bom):
     """
     Обработка одного BP файла
@@ -386,7 +440,7 @@ def process_bp_file(bp_filename, df_bom):
     saved_state = None  # Инициализируем сохранённое состояние
 
     # Шаг 1: Загрузка BP файла
-    print_step_header(1, 13, "Загрузка BP файла")
+    print_step_header(1, 14, "Загрузка BP файла")
     df_bp = load_excel_file(bp_filename, "BP файла")
     if df_bp is None:
         return None
@@ -400,7 +454,7 @@ def process_bp_file(bp_filename, df_bom):
         return process_bp_file(bp_filename, df_bom)
 
     # Шаг 2: Выбор нужных колонок
-    print_step_header(2, 13, "Выбор нужных колонок")
+    print_step_header(2, 14, "Выбор нужных колонок")
     bp_columns_to_keep = [
         'Change', 'BOM Product', 'Update Type', 'Part No.', 'Part Name(CHN)',
         'Quantity', 'Supplier Name', 'Change Description', 'Solution',
@@ -438,7 +492,7 @@ def process_bp_file(bp_filename, df_bom):
         return process_bp_file(bp_filename, df_bom)
 
     # Шаг 3: Заполнение пустых значений
-    print_step_header(3, 13, "Заполнение пустых значений")
+    print_step_header(3, 14, "Заполнение пустых значений")
     columns_with_replacements = fill_empty_values_with_dash(df_bp_new, available_cols)
 
     base_columns = ['BOM Product', 'Part No.', 'Part Name(CHN)']
@@ -467,9 +521,23 @@ def process_bp_file(bp_filename, df_bom):
     if not continue_flag:
         return process_bp_file(bp_filename, df_bom)
 
-    # Шаг 4: Перевод названий деталей
+    # Шаг 4: Ввод количества деталей в SS
+    print_step_header(4, 14, "Ввод количества деталей в SS")
+    quantity_dict = get_quantity_in_ss(df_bp_new, bp_number)
+    df_bp_new['Quantity in SS'] = df_bp_new['Part No.'].map(quantity_dict).fillna(0).astype(int)
+
+    show_dataframe_preview(
+        df_bp_new, "Ввод Quantity in SS",
+        focus_columns=['BP_No', 'Part No.', 'Part Name (CHN)', 'Quantity in SS']
+    )
+
+    continue_flag, df_bp_new, saved_state = confirm_step("Ввод Quantity in SS", df_bp_new, saved_state)
+    if not continue_flag:
+        return process_bp_file(bp_filename, df_bom)
+
+    # Шаг 5: Перевод названий деталей
     while True:
-        print_step_header(4, 13, "Перевод названий деталей")
+        print_step_header(5, 14, "Перевод названий деталей")
         if 'Part Name(CHN)' in df_bp_new.columns:
             unique_parts = get_unique_non_empty_values(df_bp_new['Part Name(CHN)'], 'Part Name(CHN)')
 
@@ -493,9 +561,9 @@ def process_bp_file(bp_filename, df_bom):
             break
         # при retry продолжаем цикл с восстановленным состоянием
 
-    # Шаг 5: Перевод поставщиков
+    # Шаг 6: Перевод поставщиков
     while True:
-        print_step_header(5, 13, "Поиск официальных названий поставщиков")
+        print_step_header(6, 14, "Поиск официальных названий поставщиков")
         if 'Supplier Name' in df_bp_new.columns:
             unique_suppliers = get_unique_non_empty_values(df_bp_new['Supplier Name'], 'Supplier Name')
 
@@ -516,8 +584,8 @@ def process_bp_file(bp_filename, df_bom):
         if continue_flag:
             break
 
-    # Шаг 6: Фильтрация китайских символов
-    print_step_header(6, 13, "Фильтрация китайских символов")
+    # Шаг 7: Фильтрация китайских символов
+    print_step_header(7, 14, "Фильтрация китайских символов")
     if 'Change Description' in df_bp_new.columns:
         df_bp_new['Change Description'] = df_bp_new['Change Description'].apply(filter_chinese_lines)
         print("  Колонка 'Change Description': фильтрация выполнена")
@@ -533,9 +601,9 @@ def process_bp_file(bp_filename, df_bom):
     if not continue_flag:
         return process_bp_file(bp_filename, df_bom)
 
-    # Шаг 7: Перевод описания
+    # Шаг 8: Перевод описания
     while True:
-        print_step_header(7, 13, "Перевод описания изменений")
+        print_step_header(8, 14, "Перевод описания к изменению")
         if 'Change Description' in df_bp_new.columns:
             unique_descs = get_unique_non_empty_values(df_bp_new['Change Description'], 'Change Description')
 
@@ -556,9 +624,9 @@ def process_bp_file(bp_filename, df_bom):
         if continue_flag:
             break
 
-    # Шаг 8: Перевод решения
+    # Шаг 9: Перевод решения
     while True:
-        print_step_header(8, 13, "Перевод решения")
+        print_step_header(9, 14, "Перевод решения к изменению")
         if 'Solution' in df_bp_new.columns:
             unique_sols = get_unique_non_empty_values(df_bp_new['Solution'], 'Solution')
 
@@ -579,9 +647,9 @@ def process_bp_file(bp_filename, df_bom):
         if continue_flag:
             break
 
-    # Шаг 9: Обработка цветов и Color Code
+    # Шаг 10: Обработка цветов и Color Code
     while True:
-        print_step_header(9, 13, "Обработка цветов и Color Code")
+        print_step_header(10, 14, "Обработка цветов и Color Code")
 
         if 'Color Name' in df_bp_new.columns:
             unique_colors = get_unique_non_empty_values(df_bp_new['Color Name'], 'Color Name')
@@ -620,9 +688,9 @@ def process_bp_file(bp_filename, df_bom):
         if continue_flag:
             break
 
-    # Шаг 10: Обработка рабочих центров
+    # Шаг 11: Обработка рабочих центров
     while True:
-        print_step_header(10, 13, "Обработка рабочих центров")
+        print_step_header(11, 14, "Обработка рабочих центров")
         if 'Workcenter Name' in df_bp_new.columns:
             df_bp_new['Workcenter Name'] = df_bp_new['Workcenter Name'].apply(extract_parentheses_content)
 
@@ -642,8 +710,8 @@ def process_bp_file(bp_filename, df_bom):
         if continue_flag:
             break
 
-    # Шаг 11: Проверка наличия в BOM
-    print_step_header(11, 13, "Проверка наличия деталей в BOM")
+    # Шаг 12: Проверка наличия в BOM
+    print_step_header(12, 14, "Проверка наличия деталей в BOM")
     if df_bom is not None and 'BOM Product' in df_bp_new.columns and 'Part No.' in df_bp_new.columns:
         try:
             df_bp_new['Composite Key'] = df_bp_new['BOM Product'].astype(str) + '|' + df_bp_new['Part No.'].astype(str)
@@ -672,14 +740,14 @@ def process_bp_file(bp_filename, df_bom):
     if not continue_flag:
         return process_bp_file(bp_filename, df_bom)
 
-    # Шаг 12: Упорядочивание колонок
-    print_step_header(12, 13, "Упорядочивание колонок")
+    # Шаг 13: Упорядочивание колонок
+    print_step_header(13, 14, "Упорядочивание колонок")
     bp_columns_order = [
-        'BP_No', 'Status', 'In Stock', 'New Part Available Date', 'BOM Product',
-        'Change', 'Update Type', 'Is in BOM', 'Part No.', 'Part Name (RUS)', 
-        'Workcenter No.', 'Workcenter Name', 'Quantity', 'Production Part Disposal',
-        'Interchangeable', 'Supplier Name (RUS)', 'Change Description (RUS)', 'Solution (RUS)',
-        'Color Code', 'Color Name (RUS)',
+    'BP_No', 'Status', 'In Stock', 'New Part Available Date', 'BOM Product',
+    'Change', 'Update Type', 'Is in BOM', 'Part No.', 'Part Name (RUS)', 'Quantity',
+    'Quantity in SS', 'Workcenter No.', 'Workcenter Name', 'Production Part Disposal',
+    'Interchangeable', 'Supplier Name (RUS)', 'Change Description (RUS)', 'Solution (RUS)',
+    'Color Code', 'Color Name (RUS)'
     ]
 
     existing_cols = [col for col in bp_columns_order if col in df_bp_new.columns]
@@ -692,15 +760,15 @@ def process_bp_file(bp_filename, df_bom):
     df_bp_new = df_bp_new[existing_cols]
     show_dataframe_preview(
         df_bp_new, "Упорядочивание колонок (финальный результат)",
-        focus_columns=['BP_No', 'Status', 'BP_No', 'Change', 'Part No.', 'Part Name (RUS)', 'Is in BOM']
+        focus_columns=['BP_No', 'Status', 'Change', 'Part No.', 'Part Name (RUS)', 'Is in BOM']
     )
 
     continue_flag, df_bp_new, saved_state = confirm_step("Упорядочивание колонок", df_bp_new, saved_state)
     if not continue_flag:
         return process_bp_file(bp_filename, df_bom)
 
-    # Шаг 13: Сохранение результата
-    print_step_header(13, 13, "Сохранение результата")
+    # Шаг 14: Сохранение результата
+    print_step_header(14, 14, "Сохранение результата")
 
     bp_dataframe = {
         'bp_number': bp_number,

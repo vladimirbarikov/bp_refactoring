@@ -5,6 +5,7 @@ BP Refactoring Tool - Точка входа
 """
 import sys
 import os
+import traceback
 from datetime import datetime
 from typing import Optional
 
@@ -75,7 +76,7 @@ def main():
 
     # Шаг 3: Сохранение
     print("\n[3] Сохранение результата...")
-    saved_file = save_processed_dataframe(summary_df, 'summary_breakpoint')
+    saved_file = save_processed_dataframe(summary_df, 'breakpoint_data')
 
     if saved_file:
         print(f"\nГотово! Файл: {saved_file}")
@@ -94,6 +95,5 @@ if __name__ == "__main__":
         sys.exit(0)
     except Exception as e:
         print(f"\n\nОшибка: {e}")
-        import traceback
         traceback.print_exc()
         sys.exit(1)
