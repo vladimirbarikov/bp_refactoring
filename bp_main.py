@@ -7,7 +7,7 @@ import sys
 import os
 import traceback
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Tuple
 
 import pandas as pd
 
@@ -15,36 +15,46 @@ from bp_refactoring import main as refactoring_main
 from bp_summary import main as summary_main
 
 
-def save_excel_file(df: pd.DataFrame, filename: str) -> bool:
-    """Сохранение Excel файла с проверкой на дубликаты"""
+def save_excel_file(
+        df: pd.DataFrame,
+        filename: str
+    ) -> Tuple[bool, str]:
+    """
+    Сохранение Excel файла с проверкой на дубликаты
+    Возвращает (успех, реальное_имя_файла)
+    """
     if df is None or df.empty:
         print(f"Внимание: Нет данных для сохранения в {filename}")
-        return False
+        return False, filename
 
-    if os.path.exists(filename):
-        print(f"Файл {filename} уже существует!")
-        name, ext = filename.rsplit('.', 1)
-        new_filename = f"{name}_v2.{ext}"
-        print(f"Сохраняем как {new_filename}")
-        filename = new_filename
+    actual_filename = filename
+
+    if os.path.exists(actual_filename):
+        print(f"Файл {actual_filename} уже существует!")
+        name, ext = actual_filename.rsplit('.', 1)
+        actual_filename = f"{name}_v2.{ext}"
+        print(f"Сохраняем как {actual_filename}")
 
     try:
-        df.to_excel(filename, index=False)
-        print(f"Файл сохранен: {filename}")
-        return True
+        df.to_excel(actual_filename, index=False)
+        print(f"Файл сохранен: {actual_filename}")
+        return True, actual_filename
     except PermissionError:
-        print(f"Ошибка: Нет прав для записи в файл '{filename}'")
+        print(f"Ошибка: Нет прав для записи в файл '{actual_filename}'")
         print("Закройте файл, если он открыт в Excel, и попробуйте снова.")
-        return False
+        return False, actual_filename
     except OSError as e:
         print(f"Ошибка при сохранении: {e}")
-        return False
+        return False, actual_filename
     except Exception as e:
         print(f"Непредвиденная ошибка при сохранении: {e}")
-        return False
+        return False, actual_filename
 
 
-def save_processed_dataframe(df: pd.DataFrame, file_prefix: str = 'summary_breakpoint') -> Optional[str]:
+def save_processed_dataframe(
+        df: pd.DataFrame,
+        file_prefix: str = 'summary_breakpoint'
+    ) -> Optional[str]:
     """
     Сохраняет обработанный DataFrame
     Возвращает имя сохранённого файла или None
@@ -52,8 +62,8 @@ def save_processed_dataframe(df: pd.DataFrame, file_prefix: str = 'summary_break
     current_date = datetime.now().strftime('%Y-%m-%d')
     filename = f"{current_date}_{file_prefix}.xlsx"
 
-    success = save_excel_file(df, filename)
-    return filename if success else None
+    success, actual_filename = save_excel_file(df, filename)
+    return actual_filename if success else None
 
 
 def main():

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Модуль bp_summary последовательно преобразует обработанные BP DataFrame в итоговый df_summary_breakpoint
+Модуль bp_summary последовательно преобразует
+обработанные BP DataFrame
+в итоговый df_summary_breakpoint
 """
 
 import os
@@ -11,21 +13,15 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
-# Путь к сетевым папкам с файлами партий (подсказка для пользователя)
-BATCH_FILES_PATH = r'\\hmmr_share\LD\Custom Clearance\Поставки\Серийный KD parts'
-
 # Для Windows консоли
 if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 
-def clear_screen():
-    """Очистка экрана консоли"""
-    os.system('cls' if os.name == 'nt' else 'clear')
-
-
-def wait_for_user(prompt="\nНажмите Enter для продолжения..."):
+def wait_for_user(
+        prompt="\nНажмите Enter для продолжения..."
+    ):
     """Ожидание нажатия Enter"""
     try:
         input(prompt)
@@ -37,14 +33,20 @@ def wait_for_user(prompt="\nНажмите Enter для продолжения..
         sys.exit(0)
 
 
-def print_step_header(step_num, total_steps, description):
+def print_step_header(
+        step_num,
+        total_steps,
+        description
+    ):
     """Вывод заголовка шага"""
     print("\n" + "=" * 60)
     print(f"ШАГ {step_num}/{total_steps}: {description}")
     print("=" * 60)
 
 
-def save_state_before_step(df):
+def save_state_before_step(
+        df
+    ):
     """
     Сохраняет состояние DataFrame перед выполнением шага
     Возвращает сохранённую копию DataFrame
@@ -55,7 +57,10 @@ def save_state_before_step(df):
     return None
 
 
-def restore_state(saved_df, step_name):
+def restore_state(
+        saved_df,
+        step_name
+    ):
     """
     Восстанавливает сохранённое состояние DataFrame
     Возвращает восстановленный DataFrame
@@ -67,7 +72,11 @@ def restore_state(saved_df, step_name):
     return None
 
 
-def confirm_step(step_name, df_current, saved_state):
+def confirm_step(
+        step_name,
+        df_current,
+        saved_state
+    ):
     """
     Запрашивает у пользователя подтверждение после выполнения шага
     Возвращает (continue_flag, df, new_saved_state)
@@ -97,7 +106,10 @@ def confirm_step(step_name, df_current, saved_state):
         return True, df_current, new_saved_state
 
 
-def safe_float_convert(value, default=0.0) -> float:
+def safe_float_convert(
+        value,
+        default=0.0
+    ) -> float:
     """
     Безопасное преобразование значения в float
     """
@@ -109,7 +121,10 @@ def safe_float_convert(value, default=0.0) -> float:
         return default
 
 
-def safe_str_convert(value, default='') -> str:
+def safe_str_convert(
+        value,
+        default=''
+    ) -> str:
     """
     Безопасное преобразование значения в строку
     """
@@ -121,7 +136,9 @@ def safe_str_convert(value, default='') -> str:
         return default
 
 
-def load_configuration_file(config_filename: str = 'configuration.xlsx') -> Optional[pd.DataFrame]:
+def load_configuration_file(
+        config_filename: str = 'configuration.xlsx'
+    ) -> Optional[pd.DataFrame]:
     """Загрузка конфигурационного файла (лист 'common')"""
     if not os.path.exists(config_filename):
         print(f"Предупреждение: Файл конфигурации '{config_filename}' не найден")
@@ -161,7 +178,11 @@ def load_configuration_file(config_filename: str = 'configuration.xlsx') -> Opti
         return None
 
 
-def show_dataframe_preview(df, step_name, max_rows=5, focus_columns=None, max_colwidth=40):
+def show_dataframe_preview(
+        df, step_name, max_rows=5,
+        focus_columns=None,
+        max_colwidth=40
+    ):
     """
     Отображает первые строки DataFrame для визуального контроля
     Числовые поля отображаются как числа, 0.0 заменяется на '-' для удобства чтения
@@ -217,7 +238,9 @@ def show_dataframe_preview(df, step_name, max_rows=5, focus_columns=None, max_co
     print()
 
 
-def classify_row_before_after(row: pd.Series) -> str:
+def classify_row_before_after(
+        row: pd.Series
+    ) -> str:
     """
     Классификация детали на 'Before', 'After' или 'Unknown'
 
@@ -250,7 +273,10 @@ def classify_row_before_after(row: pd.Series) -> str:
     return 'Unknown'
 
 
-def create_pair_dict(before_row: Optional[pd.Series], after_row: Optional[pd.Series]) -> Dict:
+def create_pair_dict(
+        before_row: Optional[pd.Series],
+        after_row: Optional[pd.Series]
+    ) -> Dict:
     """Создает словарь для одной строки итоговой таблицы из пары Before/After"""
     result = {}
 
@@ -342,7 +368,9 @@ def create_pair_dict(before_row: Optional[pd.Series], after_row: Optional[pd.Ser
     return result
 
 
-def find_pairs(df_bp: pd.DataFrame) -> List[Dict]:
+def find_pairs(
+        df_bp: pd.DataFrame
+    ) -> List[Dict]:
     """
     Поиск пар Before/After деталей
 
@@ -522,7 +550,10 @@ def find_pairs(df_bp: pd.DataFrame) -> List[Dict]:
     return pairs
 
 
-def user_input_for_single_bp(df_current: pd.DataFrame, bp_number: str) -> pd.DataFrame:
+def user_input_for_single_bp(
+        df_current: pd.DataFrame,
+        bp_number: str
+    ) -> pd.DataFrame:
     """
     Интерактивный ввод Batch fact и Change Date для одного BP файла
     Данные вводятся один раз для всего BP, а не для каждой строки
@@ -558,9 +589,18 @@ def user_input_for_single_bp(df_current: pd.DataFrame, bp_number: str) -> pd.Dat
     return df_result
 
 
-def config_lookup_for_single_bp(df_current: pd.DataFrame, df_config: Optional[pd.DataFrame]) -> pd.DataFrame:
+def config_lookup_for_single_bp(
+        df_current: pd.DataFrame,
+        df_config: Optional[pd.DataFrame]
+    ) -> pd.DataFrame:
     """
     Поиск значений в конфигурационном файле для одного BP файла
+    
+    Алгоритм:
+    1. Обрабатываются ТОЛЬКО детали Before (у которых есть Part No. Before)
+    2. Ищет Quantity vehicle in batch в конфигурации по BOM Product
+    3. Вычисляет Quantity batches in SS = round(Quantity in SS / Quantity vehicle in batch, 2)
+    4. Выводит пользователю Part No. Before
     """
     if df_config is None or df_config.empty:
         print("  Конфигурационный файл не загружен. Пропускаем поиск.")
@@ -568,10 +608,13 @@ def config_lookup_for_single_bp(df_current: pd.DataFrame, df_config: Optional[pd
 
     df_result = df_current.copy()
 
+    # Проверяем наличие необходимых колонок в конфигурации
     if 'BOM Product' not in df_config.columns or 'Quantity vehicle in batch' not in df_config.columns:
-        print("  Ошибка: В конфигурационном файле отсутствуют обязательные колонки")
+        print("  Ошибка: В конфигурационном файле отсутствуют обязательные колонки 'BOM Product' или 'Quantity vehicle in batch'")
+        print(f"  Доступные колонки: {df_config.columns.tolist()}")
         return df_result
 
+    # Приводим BOM Product к строковому типу для поиска
     df_config['BOM Product'] = df_config['BOM Product'].astype(str).str.strip()
     if 'Batch code' in df_config.columns:
         df_config['Batch code'] = df_config['Batch code'].astype(str).str.strip()
@@ -581,27 +624,42 @@ def config_lookup_for_single_bp(df_current: pd.DataFrame, df_config: Optional[pd
         df_config['Transmission'] = df_config['Transmission'].astype(str).str.strip()
 
     for idx, row in df_result.iterrows():
+        # Получаем Part No. Before - только для них нужно считать количество партий
+        part_no_before = safe_str_convert(row.get('Part No. Before', ''))
+
+        # Пропускаем строки, где нет Before детали (только After)
+        if part_no_before == '' or part_no_before == '-':
+            continue
+
+        # Получаем BOM Product для поиска в конфигурации
         bom_product = safe_str_convert(row.get('BOM Product', ''))
         batch_fact = safe_str_convert(row.get('Batch fact', ''))
+
+        # Получаем Quantity in SS
+        quantity_in_ss = row.get('Quantity in SS', 0)
+        qty_in_ss = safe_float_convert(quantity_in_ss, 0.0)
 
         if bom_product == '' or bom_product == '-':
             continue
 
+        # Ищем в конфигурации по BOM Product
         config_matches = df_config[df_config['BOM Product'] == bom_product]
         if config_matches.empty:
             continue
 
+        # Берем первое найденное значение (все Quantity vehicle in batch для одного BOM Product одинаковые)
         quantity_vehicle_in_batch = config_matches.iloc[0].get('Quantity vehicle in batch')
-        quantity_in_ss = row.get('Quantity in SS', 0)
-
-        qty_in_ss = safe_float_convert(quantity_in_ss, 0.0)
         qty_vehicle = safe_float_convert(quantity_vehicle_in_batch, 1.0)
 
+        # Вычисляем Quantity batches in SS только для Before деталей
         if qty_vehicle > 0:
             qty_batches = round(qty_in_ss / qty_vehicle, 2)
             df_result.at[idx, 'Quantity batches in SS'] = qty_batches
-            print(f"  {bom_product}: Quantity batches in SS = {qty_batches}")
 
+            # Выводим пользователю Part No. Before
+            print(f"  {part_no_before}: Количество партий в SS = {qty_batches}")
+
+        # Поиск дополнительной конфигурации по Batch fact
         if batch_fact and batch_fact != '' and batch_fact != '-':
             if 'Batch code' in df_config.columns and 'Configuration' in df_config.columns:
                 batch_prefix = batch_fact[:3] if len(batch_fact) >= 3 else batch_fact
@@ -626,18 +684,301 @@ def config_lookup_for_single_bp(df_current: pd.DataFrame, df_config: Optional[pd
     return df_result
 
 
-def load_batch_file(batch_name: str, search_path: str = BATCH_FILES_PATH) -> Optional[pd.DataFrame]:
-    """Загрузка Excel файла партии (заглушка, будет реализована позже)"""
-    batch_name = safe_str_convert(batch_name)
-    if not batch_name or batch_name == '' or batch_name == '-':
+def batch_file_loader_for_single_bp(
+        df_current: pd.DataFrame
+    ) -> pd.DataFrame:
+    """
+    Загрузка данных из упаковочного листа для одного BP файла
+    Пользователь вручную указывает файлы упаковочных листов для каждой детали
+    """
+    print("\n" + "=" * 60)
+    print("ЗАГРУЗКА УПАКОВОЧНОГО ЛИСТА")
+    print("=" * 60)
+    print(f"\nТекущая директория (куда нужно скопировать файлы): {os.getcwd()}")
+
+    df_result = df_current.copy()
+
+    # === Обработка Before деталей ===
+    print("\n[ОБРАБОТКА BEFORE ДЕТАЛЕЙ]")
+    print("ИНСТРУКЦИЯ:")
+    print("  1. Найдите номер партии в системе SCM по номеру детали")
+    print("  2. Найдите в папке упаковочный лист (Excel файл) для найденной партии")
+    print("  3. Папка с упаковочными листами находится здесь: \\hmmr_share\LD\Custom Clearance\Поставки\Серийный KD parts")
+    print("  4. СКОПИРУЙТЕ нужный файл упаковочного листа в ТЕКУЩУЮ папку (где находится программа)")
+    print("  5. Введите имя файла для загрузки данных (или Enter чтобы пропустить)")
+    print("-" * 60)
+
+    for idx, row in df_result.iterrows():
+        part_no_before = safe_str_convert(row.get('Part No. Before', ''))
+        part_name_before = safe_str_convert(row.get('Part Name Before', ''))
+
+        if part_no_before and part_no_before != '' and part_no_before != '-':
+            print(f"\n  Деталь Before: {part_no_before}")
+            print(f"  Название: {part_name_before[:50] + '...' if len(part_name_before) > 50 else part_name_before}")
+
+            while True:
+                filename = input("  Введите имя файла упаковочного листа (или Enter чтобы пропустить): ").strip()
+
+                if filename == '':
+                    print("    → Пропущено. Данные будут заполнены позже в Excel.")
+                    break
+
+                # Загружаем файл
+                df_batch = load_batch_file_by_name(filename, os.getcwd())
+
+                if df_batch is not None:
+                    # Извлекаем данные для детали
+                    batch_data = extract_packaging_data(df_batch, part_no_before)
+                    if batch_data:
+                        df_result.at[idx, 'Quantity per Box Before'] = batch_data['parts_qty_box']
+                        df_result.at[idx, 'Box Before (L-W-H) mm'] = batch_data['box_size']
+                        df_result.at[idx, 'Pallet Before (L-W-H) mm'] = batch_data['pallet_size']
+                        print(f"    → Данные загружены: Qty/Box={batch_data['parts_qty_box']}, Box={batch_data['box_size']}, Pallet={batch_data['pallet_size']}")
+                    else:
+                        print(f"    → Деталь {part_no_before} не найдена в файле {filename}")
+                    break
+                else:
+                    print("    → Файл не найден. Проверьте имя файла и попробуйте снова.")
+                    retry = input("    Повторить? (Enter - да, 'no' - пропустить): ").strip().lower()
+                    if retry == 'no':
+                        print("    → Пропущено.")
+                        break
+
+    # === Обработка After деталей (только если есть Batch fact) ===
+    print("\n[ОБРАБОТКА AFTER ДЕТАЛЕЙ]")
+    print("ИНСТРУКЦИЯ:")
+    print("  1. Найдите в папке упаковочный лист (Excel файл) для партии указанной в колонке 'Batch fact'")
+    print("  2. Папка с упаковочными листами находится здесь: \\hmmr_share\LD\Custom Clearance\Поставки\Серийный KD parts")
+    print("  3. СКОПИРУЙТЕ нужный файл упаковочного листа в ТЕКУЩУЮ папку (где находится программа)")
+    print("  4. Введите имя файла для загрузки данных (или Enter чтобы пропустить)")
+    print("-" * 60)
+
+    for idx, row in df_result.iterrows():
+        part_no_after = safe_str_convert(row.get('Part No. After', ''))
+        part_name_after = safe_str_convert(row.get('Part Name After', ''))
+        batch_fact = safe_str_convert(row.get('Batch fact', ''))
+
+        if part_no_after and part_no_after != '' and part_no_after != '-':
+            if batch_fact and batch_fact != '' and batch_fact != '-':
+                print(f"\n  Деталь After: {part_no_after}")
+                print(f"  Название: {part_name_after[:50] + '...' if len(part_name_after) > 50 else part_name_after}")
+                print(f"  Batch fact: {batch_fact}")
+
+                while True:
+                    filename = input("  Введите имя файла упаковочного листа (или Enter чтобы пропустить): ").strip()
+
+                    if filename == '':
+                        print("    → Пропущено. Данные будут заполнены позже в Excel.")
+                        break
+
+                    # Загружаем файл
+                    df_batch = load_batch_file_by_name(filename, os.getcwd())
+
+                    if df_batch is not None:
+                        # Извлекаем данные для детали
+                        batch_data = extract_packaging_data(df_batch, part_no_after)
+                        if batch_data:
+                            df_result.at[idx, 'Quantity per Box After'] = batch_data['parts_qty_box']
+                            df_result.at[idx, 'Box After (L-W-H) mm'] = batch_data['box_size']
+                            df_result.at[idx, 'Pallet After (L-W-H) mm'] = batch_data['pallet_size']
+                            print(f"    → Данные загружены: Qty/Box={batch_data['parts_qty_box']}, Box={batch_data['box_size']}, Pallet={batch_data['pallet_size']}")
+                        else:
+                            print(f"    → Деталь {part_no_after} не найдена в файле {filename}")
+                        break
+                    else:
+                        print("    → Файл не найден. Проверьте имя файла и попробуйте снова.")
+                        retry = input("    Повторить? (Enter - да, 'no' - пропустить): ").strip().lower()
+                        if retry == 'no':
+                            print("    → Пропущено.")
+                            break
+            else:
+                print(f"\n  Деталь After: {part_no_after} - пропущена (не указан Batch fact)")
+
+    print("\n" + "=" * 60)
+    print("Завершена загрузка файлов партий.")
+    print("=" * 60)
+
+    return df_result
+
+
+def extract_packaging_data(
+        df_batch: pd.DataFrame,
+        part_no: str
+    ) -> Optional[Dict]:
+    """
+    Извлекает данные упаковки для указанной детали из DataFrame упаковочного листа
+
+    Args:
+        df_batch: DataFrame с данными упаковочного листа
+        part_no: номер детали для поиска
+
+    Returns:
+        Словарь с данными:
+        - parts_qty_box: количество деталей в коробке
+        - box_size: размер коробки (строка)
+        - pallet_size: размер паллеты (строка)
+        или None, если деталь не найдена
+    """
+    if df_batch is None or df_batch.empty:
         return None
 
-    if len(batch_name) >= 4:
-        file_number = batch_name[3:]
-        file_prefix = batch_name[:3]
-        filename = f"{file_number} {file_prefix}.xlsx"
+    # Очищаем DataFrame: удаляем строки с пропущенными Part No.
+    df_clean = df_batch.copy()
+
+    # Определяем строку с заголовками (где есть '零部件号码' или 'Part No.')
+    header_row_idx = None
+    for idx, row in df_clean.iterrows():
+        # Преобразуем строку в список строковых значений
+        row_values = [str(val).strip() for val in row.values]
+        if '零部件号码' in row_values or 'Part No.' in row_values:
+            header_row_idx = idx
+            break
+
+    if header_row_idx is not None:
+        # Преобразуем индекс в числовую позицию
+        # Получаем список всех индексов и находим позицию
+        idx_list = df_clean.index.tolist()
+        if header_row_idx in idx_list:
+            header_pos = idx_list.index(header_row_idx)
+        else:
+            header_pos = 0
+
+        # Получаем заголовки как список строк
+        header_row = df_clean.iloc[header_pos]
+        new_columns = []
+        for i, col in enumerate(header_row.values):
+            if pd.isna(col):
+                col_name = f'Unnamed_{i}'
+            else:
+                col_name = str(col).strip()
+            new_columns.append(col_name)
+
+        # Удаляем строку с заголовками и все строки до неё
+        df_clean = df_clean.iloc[header_pos + 1:].reset_index(drop=True)
+
+        # Устанавливаем новые колонки
+        # Убеждаемся, что количество колонок совпадает
+        if len(new_columns) == len(df_clean.columns):
+            df_clean.columns = new_columns
+        else:
+            # Если количество не совпадает, используем только уникальные имена
+            unique_columns = []
+            for i, col in enumerate(new_columns):
+                if col == '' or col == 'nan':
+                    col = f'Unnamed_{i}'
+                if col in unique_columns:
+                    col = f'{col}_{i}'
+                unique_columns.append(col)
+            # Обрезаем или дополняем список колонок до нужной длины
+            if len(unique_columns) > len(df_clean.columns):
+                unique_columns = unique_columns[:len(df_clean.columns)]
+            elif len(unique_columns) < len(df_clean.columns):
+                for i in range(len(unique_columns), len(df_clean.columns)):
+                    unique_columns.append(f'Unnamed_{i}')
+            df_clean.columns = unique_columns
+
+    # Определяем названия нужных колонок (с поддержкой кириллицы и латиницы)
+    col_part_no = None
+    col_parts_qty_box = None
+    col_box_size = None
+    col_pallet_size = None
+
+    for col in df_clean.columns:
+        col_str = str(col).strip()
+        if '零部件号码' in col_str or 'Part No.' in col_str:
+            col_part_no = col
+        elif '纸箱装入数量' in col_str or 'Parts Q\'ty-Box' in col_str or 'Parts Qty-Box' in col_str:
+            col_parts_qty_box = col
+        elif '纸箱尺寸' in col_str or 'Box Size' in col_str or 'Box size' in col_str.lower():
+            col_box_size = col
+        elif '包装单元尺寸' in col_str or 'Pallet Size' in col_str or 'Pallet size' in col_str.lower():
+            col_pallet_size = col
+
+    if col_part_no is None:
+        print("  Предупреждение: Не найдена колонка с номерами деталей")
+        return None
+
+    # Ищем строку с нужным Part No.
+    part_no_str = str(part_no).strip()
+
+    # Приводим колонку с Part No. к строковому типу
+    df_clean[col_part_no] = df_clean[col_part_no].astype(str).str.strip()
+
+    # Ищем точное совпадение
+    mask = df_clean[col_part_no] == part_no_str
+    matching_rows = df_clean[mask]
+
+    if matching_rows.empty:
+        return None
+
+    # Берем первую найденную строку
+    row = matching_rows.iloc[0]
+
+    # Извлекаем данные
+    result = {}
+
+    # Количество деталей в коробке
+    if col_parts_qty_box is not None:
+        qty = row.get(col_parts_qty_box)
+        try:
+            if qty is not None:
+                if isinstance(qty, (int, float)):
+                    result['parts_qty_box'] = float(qty)
+                elif str(qty).strip() not in ['', '-', 'nan', 'None']:
+                    result['parts_qty_box'] = float(qty)
+                else:
+                    result['parts_qty_box'] = 0.0
+            else:
+                result['parts_qty_box'] = 0.0
+        except (ValueError, TypeError):
+            result['parts_qty_box'] = 0.0
     else:
-        filename = f"{batch_name}.xlsx"
+        result['parts_qty_box'] = 0.0
+
+    # Размер коробки
+    if col_box_size is not None:
+        box_size = row.get(col_box_size)
+        if pd.isna(box_size) or str(box_size).strip() == '-':
+            result['box_size'] = ''
+        else:
+            result['box_size'] = str(box_size).strip()
+    else:
+        result['box_size'] = ''
+
+    # Размер паллеты
+    if col_pallet_size is not None:
+        pallet_size = row.get(col_pallet_size)
+        if pd.isna(pallet_size) or str(pallet_size).strip() == '-':
+            result['pallet_size'] = ''
+        else:
+            result['pallet_size'] = str(pallet_size).strip()
+    else:
+        result['pallet_size'] = ''
+
+    return result
+
+
+def load_batch_file_by_name(
+        filename: str,
+        search_path: str
+    ) -> Optional[pd.DataFrame]:
+    """
+    Загрузка Excel файла партии по указанному имени файла
+
+    Args:
+        filename: имя файла (например, '2029 RKV.xlsx')
+        search_path: путь к папке с файлами партий
+
+    Returns:
+        DataFrame с данными партии или None
+    """
+    if not filename or filename == '':
+        print("  Ошибка: Имя файла не указано")
+        return None
+
+    # Если расширение не указано, добавляем .xlsx
+    if not filename.endswith(('.xlsx', '.xls')):
+        filename = filename + '.xlsx'
 
     full_path = os.path.join(search_path, filename)
 
@@ -646,8 +987,9 @@ def load_batch_file(batch_name: str, search_path: str = BATCH_FILES_PATH) -> Opt
         return None
 
     try:
-        df_batch = pd.read_excel(full_path)
-        print(f"  Файл загружен: {filename}")
+        # Загружаем первый лист
+        df_batch = pd.read_excel(full_path, sheet_name=0)
+        print(f"  Файл загружен: {filename} ({df_batch.shape[0]} строк)")
         return df_batch
     except FileNotFoundError:
         print(f"  Ошибка: Файл '{full_path}' не найден")
@@ -672,33 +1014,12 @@ def load_batch_file(batch_name: str, search_path: str = BATCH_FILES_PATH) -> Opt
         return None
 
 
-def batch_file_loader_for_single_bp(df_current: pd.DataFrame) -> pd.DataFrame:
-    """
-    Загрузка файлов партий для одного BP файла (заглушка)
-    TODO: Реализовать после получения образцов файлов
-    """
-    print("\n  Проверка файлов партий...")
-    print("  ВНИМАНИЕ: Функционал в разработке. Поля останутся пустыми.")
-
-    df_result = df_current.copy()
-
-    for _, row in df_result.iterrows():
-        batch_fact = safe_str_convert(row.get('Batch fact', ''))
-        if batch_fact and batch_fact != '' and batch_fact != '-':
-            print(f"    Проверка партии: {batch_fact}")
-            df_batch = load_batch_file(batch_fact)
-            if df_batch is not None:
-                print("      Файл загружен (TODO: извлечение данных)")
-
-    return df_result
-
-
 def process_single_bp(
-    bp_number: str,
-    df_bp: pd.DataFrame,
-    df_config: Optional[pd.DataFrame],
-    interactive: bool = True
-) -> pd.DataFrame:
+        bp_number: str,
+        df_bp: pd.DataFrame,
+        df_config: Optional[pd.DataFrame],
+        interactive: bool = True
+    ) -> pd.DataFrame:
     """
     Обработка одного BP файла с подтверждением каждого шага:
     1. Поиск пар Before/After
@@ -780,40 +1101,45 @@ def process_single_bp(
     # Шаг 2: Пользовательский ввод
     if interactive:
         while True:
-            print_step_header(2, 4, "Ввод данных пользователем")
+            print_step_header(2, 4, "Ввод данных Batch fact и Change Date")
             df_current = user_input_for_single_bp(df_current, bp_number)
             show_dataframe_preview(
-                df_current, "Ввод данных пользователем",
+                df_current, "Ввод данных Batch fact и Change Date",
                 focus_columns=['BP_No', 'Batch fact', 'Change Date', 'Part No. Before', 'Part No. After']
             )
 
-            continue_flag, df_current, saved_state = confirm_step("Ввод данных пользователем", df_current, saved_state)
+            continue_flag, df_current, saved_state = confirm_step("Ввод данных Batch fact и Change Date", df_current, saved_state)
             if continue_flag:
                 break
 
-    # Шаг 3: Поиск в конфигурации
+    # Шаг 3: Поиск данных в конфигурационном файле
     while True:
-        print_step_header(3, 4, "Поиск в конфигурационном файле")
+        print_step_header(3, 4, "Поиск данных в конфигурационном файле")
         df_current = config_lookup_for_single_bp(df_current, df_config)
         show_dataframe_preview(
-            df_current, "Поиск в конфигурации",
-            focus_columns=['BP_No', 'BOM Product', 'Quantity in SS', 'Quantity batches in SS', 'Configuration for old parts using out']
+            df_current, "Поиск данных в конфигурационном файле",
+            focus_columns=['BP_No', 'Part No. Before', 'Quantity in SS', 'Quantity batches in SS', 'Configuration for old parts using out']
         )
 
-        continue_flag, df_current, saved_state = confirm_step("Поиск в конфигурационном файле", df_current, saved_state)
+        continue_flag, df_current, saved_state = confirm_step("Поиск данных в конфигурационном файле", df_current, saved_state)
         if continue_flag:
             break
 
-    # Шаг 4: Загрузка файлов партий
+    # Шаг 4: Загрузка данных из упаковочного листа
     while True:
-        print_step_header(4, 4, "Проверка файлов партий")
+        print_step_header(4, 4, "Загрузка данных из упаковочного листа")
         df_current = batch_file_loader_for_single_bp(df_current)
         show_dataframe_preview(
-            df_current, "Проверка файлов партий",
-            focus_columns=['BP_No', 'Batch fact', 'Quantity per Box Before', 'Quantity per Box After']
+            df_current, "Загрузка данных из упаковочного листа",
+            focus_columns=[
+                'BP_No', 'Part No. Before', 'Part No. After',
+                'Quantity per Box Before', 'Quantity per Box After',
+                'Box Before (L-W-H) mm', 'Box After (L-W-H) mm',
+                'Pallet Before (L-W-H) mm', 'Pallet After (L-W-H) mm'
+            ]
         )
 
-        continue_flag, df_current, saved_state = confirm_step("Проверка файлов партий", df_current, saved_state)
+        continue_flag, df_current, saved_state = confirm_step("Загрузка данных из упаковочного листа", df_current, saved_state)
         if continue_flag:
             break
 
@@ -822,13 +1148,14 @@ def process_single_bp(
     return df_current
 
 
-def main(processed_results: Dict[str, pd.DataFrame], interactive: bool = True) -> pd.DataFrame:
+def main(
+        processed_results: Dict[str, pd.DataFrame],
+        interactive: bool = True
+    ) -> pd.DataFrame:
     """
     Главная функция модуля summary_breakpoint_table
     Последовательная обработка каждого BP файла
     """
-    clear_screen()
-
     print("""
         ╔══════════════════════════════════════════════════════════════╗
         ║           SUMMARY BREAKPOINT TABLE GENERATOR v1.0            ║
@@ -837,6 +1164,20 @@ def main(processed_results: Dict[str, pd.DataFrame], interactive: bool = True) -
         """)
 
     print(f"Найдено BP файлов для обработки: {len(processed_results)}")
+
+    print("\nБудут обработаны следующие шаги для каждого BP файла:")
+    print("   1. Поиск пар Before/After деталей (связывание изменений)")
+    print("   2. Ввод данных: Batch fact (номер партии) и Change Date (дата изменения)")
+    print("   3. Поиск данных в конфигурационном файле (Quantity vehicle in batch)")
+    print("   4. Расчёт количества партий на складе Safety Stock (Quantity batches in SS)")
+    print("   5. Поиск конфигурации для утилизации старых деталей (Configuration for old parts using out)")
+    print("   6. Загрузка упаковочных листов для Before и After деталей")
+    print("   7. Извлечение данных упаковки:")
+    print("      - Quantity per Box (количество деталей в коробке)")
+    print("      - Box Size (размер коробки)")
+    print("      - Pallet Size (размер паллеты)")
+    print("   8. Формирование итоговой таблицы со всеми колонками")
+    print("-" * 60)
 
     # Загрузка конфигурационного файла (один раз для всех)
     print("\n" + "=" * 60)
@@ -892,7 +1233,6 @@ def main(processed_results: Dict[str, pd.DataFrame], interactive: bool = True) -
     df_summary = df_summary[column_order]
 
     # Итоги
-    clear_screen()
     print("\n" + "=" * 60)
     print("ИТОГОВАЯ ТАБЛИЦА SUMMARY BREAKPOINT")
     print("=" * 60)
