@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# pylint: disable=line-too-long
+# pylint: disable=too-many-lines
 """
 BP Refactoring Tool - Пошаговая обработка Excel файлов
 Использование: python bp_refactoring.py
@@ -9,14 +11,12 @@ import os
 import re
 import sys
 import warnings
+from datetime import datetime
+from typing import Optional
 
 import pandas as pd
-from pandas.errors import EmptyDataError, ParserError
 
-from openpyxl import Workbook
-from openpyxl import load_workbook
-from openpyxl.utils import get_column_letter
-from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+from pandas.errors import EmptyDataError, ParserError
 from openpyxl.utils.exceptions import InvalidFileException
 
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
@@ -42,6 +42,26 @@ def safe_str_convert(
         return default
     try:
         return str(value).strip()
+    except (ValueError, TypeError):
+        return default
+
+
+def safe_date_convert(
+        value,
+        default=None,
+        pattern: str = '%Y-%m-%d'
+    ) -> Optional[datetime]:
+    """
+    Безопасное преобразование значения в дату
+    """
+    try:
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            return datetime.strptime(value, pattern)
+        if isinstance(value, (int, float)):
+            return datetime.fromtimestamp(value)
+        return default
     except (ValueError, TypeError):
         return default
 
@@ -327,104 +347,80 @@ def find_bp_files():
     return bp_files
 
 
-def save_with_template_formatting(
-        df_new_data: pd.DataFrame,
-        template_filename: str,
-        output_filename: str,
-        sheet_name: str = 'pivot'
-    ) -> bool:
+def find_latest_breakpoint_file(file_prefix: str = 'breakpoint_data') -> Optional[str]:
     """
-    Сохраняет DataFrame в Excel, копируя форматирование (цвета, ширину колонок) из шаблона
-    
+    Находит файл breakpoint_data с самой поздней датой в имени
+
     Args:
-        df_new_data: DataFrame с новыми данными
-        template_filename: имя файла-шаблона (откуда брать форматирование)
-        output_filename: имя файла для сохранения
-        sheet_name: имя листа
-    
+        file_prefix: префикс имени файла
+
     Returns:
-        True если сохранение успешно, False если ошибка
+        Имя самого свежего файла или None, если файлы не найдены
     """
+    pattern = rf"[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}_{file_prefix}\.xlsx"
+
+    matching_files = []
+
+    for filename in os.listdir('.'):
+        if re.match(pattern, filename):
+            # Извлекаем дату из имени файла
+            date_str = filename[:10]  # первые 10 символов = YYYY-MM-DD
+            try:
+                file_date = datetime.strptime(date_str, '%Y-%m-%d')
+                matching_files.append((file_date, filename))
+            except ValueError:
+                continue
+
+    if not matching_files:
+        return None
+
+    # Сортируем по дате и возвращаем самый свежий
+    matching_files.sort(key=lambda x: x[0], reverse=True)
+    return matching_files[0][1]
+
+
+def load_latest_breakpoint_data(file_prefix: str = 'breakpoint_data') -> Optional[pd.DataFrame]:
+    """
+    Загружает самый свежий файл breakpoint_data с датой в имени
+    Возвращает DataFrame или None, если файлы не найдены
+    """
+    latest_file = find_latest_breakpoint_file(file_prefix)
+
+    if latest_file is None:
+        print("  Внимание: Не найдено ни одного файла breakpoint_data с историей")
+        return None
+
     try:
-        # Загружаем шаблон
-        template_wb = load_workbook(template_filename)
-        template_ws = template_wb[sheet_name]
-
-        # Создаём новый Workbook
-        new_wb = Workbook()
-        new_ws = new_wb.active
-        new_ws.title = sheet_name
-
-        # Записываем заголовки
-        headers = list(df_new_data.columns)
-        for col_idx, header in enumerate(headers, 1):
-            new_ws.cell(row=1, column=col_idx, value=header)
-
-        # Записываем данные
-        for row_idx, row in enumerate(df_new_data.values, 2):
-            for col_idx, value in enumerate(row, 1):
-                new_ws.cell(row=row_idx, column=col_idx, value=value)
-
-        # === КОПИРУЕМ ФОРМАТИРОВАНИЕ ИЗ ШАБЛОНА ===
-        # 1. Копируем ширину колонок
-        for col_idx in range(1, min(len(headers), template_ws.max_column) + 1):
-            col_letter = get_column_letter(col_idx)
-            if col_letter in template_ws.column_dimensions:
-                new_ws.column_dimensions[col_letter].width = template_ws.column_dimensions[col_letter].width
-
-        # 2. Копируем форматирование для заголовков (строка 1)
-        for col_idx in range(1, min(len(headers), template_ws.max_column) + 1):
-            source_cell = template_ws.cell(row=1, column=col_idx)
-            target_cell = new_ws.cell(row=1, column=col_idx)
-
-            if source_cell.has_style:
-                if source_cell.font:
-                    target_cell.font = source_cell.font.copy()
-                if source_cell.fill:
-                    target_cell.fill = source_cell.fill.copy()
-                if source_cell.border:
-                    target_cell.border = source_cell.border.copy()
-                if source_cell.alignment:
-                    target_cell.alignment = source_cell.alignment.copy()
-
-        # 3. Копируем стили для строк данных
-        max_template_row = min(template_ws.max_row, len(df_new_data) + 1)
-
-        for row_idx in range(2, max_template_row + 1):
-            for col_idx in range(1, min(len(headers), template_ws.max_column) + 1):
-                source_cell = template_ws.cell(row=row_idx, column=col_idx)
-                target_cell = new_ws.cell(row=row_idx, column=col_idx)
-
-                if source_cell.has_style:
-                    if source_cell.font:
-                        target_cell.font = source_cell.font.copy()
-                    if source_cell.fill:
-                        target_cell.fill = source_cell.fill.copy()
-                    if source_cell.border:
-                        target_cell.border = source_cell.border.copy()
-                    if source_cell.alignment:
-                        target_cell.alignment = source_cell.alignment.copy()
-
-        # Сохраняем новый файл
-        new_wb.save(output_filename)
-        print(f"  Файл '{output_filename}' сохранён с форматированием из шаблона")
-        return True
-
-    except ImportError as e:
-        print(f"  Ошибка импорта openpyxl: {e}")
-        print("  Сохраняем без форматирования...")
-        df_new_data.to_excel(output_filename, index=False)
-        return False
+        # Загружаем с указанием строки заголовка (3-я строка = header=2)
+        df = pd.read_excel(latest_file, header=2)
+        print(f"  Загружен последний файл: {latest_file}")
+        print(f"  В нём {len(df)} строк")
+        return df
     except FileNotFoundError:
-        print(f"  Файл шаблона '{template_filename}' не найден")
-        print("  Сохраняем без форматирования...")
-        df_new_data.to_excel(output_filename, index=False)
-        return False
+        print(f"  Ошибка: Файл '{latest_file}' не найден")
+        return None
+    except PermissionError:
+        print(f"  Ошибка: Нет прав для чтения файла '{latest_file}'")
+        print("  Закройте файл, если он открыт в Excel, и попробуйте снова.")
+        return None
+    except (EmptyDataError, ParserError) as e:
+        print(f"  Ошибка: Файл '{latest_file}' повреждён или имеет неверный формат: {e}")
+        return None
+    except InvalidFileException:
+        print(f"  Ошибка: Файл '{latest_file}' не является корректным Excel файлом")
+        return None
+    except ValueError as e:
+        if "Excel file format cannot be determined" in str(e):
+            print(f"  Ошибка: Не удалось определить формат файла '{latest_file}'")
+            print("  Убедитесь, что файл имеет расширение .xlsx или .xls")
+        else:
+            print(f"  Ошибка при загрузке файла '{latest_file}': {e}")
+        return None
     except Exception as e:
-        print(f"  Ошибка при копировании форматирования: {e}")
-        print("  Сохраняем без форматирования...")
-        df_new_data.to_excel(output_filename, index=False)
-        return False
+        # Непредвиденная ошибка
+        print(f"  НЕПРЕДВИДЕННАЯ ОШИБКА при загрузке файла '{latest_file}': {e}")
+        print(f"  Тип ошибки: {type(e).__name__}")
+        return None
 
 
 def new_bp_check():
@@ -434,7 +430,7 @@ def new_bp_check():
     """
 
     # Проверка наличия файлов перед загрузкой
-    required_files = ['bp_list_2025-2026.xlsx', 'breakpoint_data.xlsx']
+    required_files = ['bp_list_2025-2026.xlsx']
     missing_files = []
 
     for file in required_files:
@@ -492,70 +488,37 @@ def new_bp_check():
         print(f"  Тип ошибки: {type(e).__name__}")
         return None
 
-    # 2) Загрузка breakpoint_data.xlsx с обработкой ошибок
-    print("\n  Загрузка файла breakpoint_data.xlsx...")
-    df_source_breakpoint_data = None
-
-    try:
-        # Проверка прав доступа к файлу
-        if not os.access('breakpoint_data.xlsx', os.R_OK):
-            print("  ОШИБКА: Нет прав на чтение файла breakpoint_data.xlsx!")
-            print("  Закройте файл, если он открыт в Excel, и попробуйте снова.")
-            return None
-
-        # Загружаем с указанием строки заголовка (3-я строка = header=2)
-        df_source_breakpoint_data = pd.read_excel('breakpoint_data.xlsx', header=2)
-        
-        print("    Файл 'breakpoint_data.xlsx' загружен успешно!")
-        print(f"    Размер: {df_source_breakpoint_data.shape[0]} строк × {df_source_breakpoint_data.shape[1]} колонок")
-        
-        # Проверяем, что колонка BP_No действительно существует
-        if 'BP_No' not in df_source_breakpoint_data.columns:
-            print("  ОШИБКА: Колонка 'BP_No' не найдена в breakpoint_data.xlsx!")
-            print(f"  Доступные колонки: {list(df_source_breakpoint_data.columns)[:10]}...")
-            print("  Убедитесь, что заголовки находятся на 3-й строке файла.")
-            return None
-
-    except PermissionError:
-        print("  ОШИБКА: Нет прав доступа к файлу breakpoint_data.xlsx!")
-        print("  Закройте файл, если он открыт в других программах, и попробуйте снова.")
-        return None
-    except FileNotFoundError:
-        print("  ОШИБКА: Файл breakpoint_data.xlsx не найден!")
-        return None
-    except EmptyDataError:
-        print("  ОШИБКА: Файл breakpoint_data.xlsx пуст!")
-        return None
-    except ParserError as e:
-        print(f"  ОШИБКА: Не удалось разобрать файл breakpoint_data.xlsx: {e}")
-        return None
-    except InvalidFileException:
-        print("  ОШИБКА: Файл breakpoint_data.xlsx не является корректным Excel файлом!")
-        return None
-    except ValueError as e:
-        if "Excel file format cannot be determined" in str(e):
-            print("  ОШИБКА: Не удалось определить формат файла breakpoint_data.xlsx!")
-            print("  Убедитесь, что файл имеет расширение .xlsx или .xls")
-        else:
-            print(f"  ОШИБКА при загрузке breakpoint_data.xlsx: {e}")
-        return None
-    except Exception as e:
-        print(f"  НЕПРЕДВИДЕННАЯ ОШИБКА при загрузке breakpoint_data.xlsx: {e}")
-        print(f"  Тип ошибки: {type(e).__name__}")
-        return None
-
-    # Проверка, что DataFrame не пустые
-    if df_source_bp_list is None or df_source_bp_list.empty:
-        print("\n  ОШИБКА: bp_list_2025-2026.xlsx пуст или не загружен!")
-        return None
+    # 2) Загрузка самого свежего breakpoint_data.xlsx с датой в имени
+    print("\n  Загрузка последнего файла breakpoint_data...")
+    df_source_breakpoint_data = load_latest_breakpoint_data()
 
     if df_source_breakpoint_data is None or df_source_breakpoint_data.empty:
-        print("\n  ОШИБКА: breakpoint_data.xlsx пуст или не загружен!")
-        return None
+        print("  ВНИМАНИЕ: Не найдено файлов breakpoint_data с историей")
+        print("  Все BP из списка будут считаться новыми.")
+        set_bp_no = set()
+    else:
+        # Проверяем, что колонка BP_No действительно существует
+        if 'BP_No' not in df_source_breakpoint_data.columns:
+            print("  ОШИБКА: Колонка 'BP_No' не найдена в загруженном файле!")
+            print(f"  Доступные колонки: {list(df_source_breakpoint_data.columns)[:10]}...")
+            return None
 
-    # 3) Применение фильтров к df_source_bp_list
+        # Очистка данных: удаляем пустые значения и NaN
+        bp_no_series = df_source_breakpoint_data['BP_No'].dropna()
+        if bp_no_series.empty:
+            print("  ВНИМАНИЕ: Колонка 'BP_No' не содержит значений!")
+            set_bp_no = set()
+        else:
+            set_bp_no = set(bp_no_series.astype(str).str.strip())
+            set_bp_no = {bp for bp in set_bp_no if bp and bp != 'nan' and bp != 'None'}
+
+        print(f"  Уникальных BP в последнем файле: {len(set_bp_no)}")
+
+    # 3) Применение фильтров к df_source_bp_list (как в test_bp_check.py)
     print("\n  Применение фильтров к bp_list_2025-2026.xlsx...")
-    df_filtered = df_source_bp_list.copy()
+
+    # Удаляем полностью пустые строки
+    df_filtered = df_source_bp_list.dropna(how='all').copy()
 
     # Проверка наличия необходимых колонок
     required_columns = ['IsUnBomBP', 'Status', 'Date', 'Part Name (E)', 'BP']
@@ -568,103 +531,38 @@ def new_bp_check():
         print(f"\n  Доступные колонки: {list(df_filtered.columns)}")
         return None
 
+    # Преобразование колонок (как в test_bp_check.py)
+    print("  Преобразование колонок...")
+    df_filtered['IsUnBomBP'] = df_filtered['IsUnBomBP'].apply(safe_str_convert)
+    df_filtered['Status'] = df_filtered['Status'].apply(safe_str_convert)
+    df_filtered['Part Name (E)'] = df_filtered['Part Name (E)'].apply(safe_str_convert)
+
+    df_filtered['Date'] = df_filtered['Date'].apply(safe_date_convert)
+
     # Фильтр 1: IsUnBomBP = "No"
-    if 'IsUnBomBP' in df_filtered.columns:
-        initial_count = len(df_filtered)
-        try:
-            isunbom_mask = df_filtered['IsUnBomBP'].astype(str).str.strip() == 'No'
-            df_filtered = df_filtered[isunbom_mask]
-            print(f"    - Фильтр IsUnBomBP = 'No': {initial_count} → {len(df_filtered)} строк")
-        except KeyError as e:
-            print(f"    - ОШИБКА: Колонка 'IsUnBomBP' не найдена: {e}")
-            return None
-        except AttributeError as e:
-            print(f"    - ОШИБКА: Не удалось обработать колонку 'IsUnBomBP': {e}")
-            return None
-        except Exception as e:
-            print(f"    - НЕПРЕДВИДЕННАЯ ОШИБКА при фильтрации по IsUnBomBP: {e}")
-            print(f"      Тип: {type(e).__name__}")
-            return None
+    initial_count = len(df_filtered)
+    mask1 = df_filtered['IsUnBomBP'] == 'No'
+    df_filtered = df_filtered[mask1]
+    print(f"    - Фильтр IsUnBomBP = 'No': {initial_count} → {len(df_filtered)} строк")
 
-    # Фильтр 2: Status = "Published" или "Approved"
-    if 'Status' in df_filtered.columns:
-        initial_count = len(df_filtered)
-        try:
-            status_mask = df_filtered['Status'].astype(str).str.strip().isin(['Published', 'Approved'])
-            df_filtered = df_filtered[status_mask]
-            print(f"    - Фильтр Status = 'Published' или 'Approved': {initial_count} → {len(df_filtered)} строк")
-        except KeyError as e:
-            print(f"    - ОШИБКА: Колонка 'Status' не найдена: {e}")
-            return None
-        except AttributeError as e:
-            print(f"    - ОШИБКА: Не удалось обработать колонку 'Status': {e}")
-            return None
-        except Exception as e:
-            print(f"    - НЕПРЕДВИДЕННАЯ ОШИБКА при фильтрации по Status: {e}")
-            print(f"      Тип: {type(e).__name__}")
-            return None
+    # Фильтр 2: Status != 'Closed'
+    initial_count = len(df_filtered)
+    mask2 = df_filtered['Status'] != 'Closed'
+    df_filtered = df_filtered[mask2]
+    print(f"    - Фильтр Status != 'Closed': {initial_count} → {len(df_filtered)} строк")
 
-    # Фильтр 3: Date >= 01.04.2026
-    if 'Date' in df_filtered.columns:
-        initial_count = len(df_filtered)
-        try:
-            # Сохраняем оригинальные значения для анализа
-            df_filtered['Date_parsed'] = pd.to_datetime(df_filtered['Date'], errors='coerce', dayfirst=True)
+    # Фильтр 3: Date >= 01.04.2026 ИЛИ дата пустая
+    initial_count = len(df_filtered)
+    cutoff_date = pd.to_datetime('2026-04-01')
+    mask3 = (df_filtered['Date'] >= cutoff_date) | (df_filtered['Date'].isna())
+    df_filtered = df_filtered[mask3]
+    print(f"    - Фильтр Date >= 01.04.2026 или пустая дата: {initial_count} → {len(df_filtered)} строк")
 
-            # Проверяем реальные ошибки формата (не пустые, но не распознались)
-            nat_mask = df_filtered['Date_parsed'].isna()
-            non_empty_mask = df_filtered['Date'].notna()
-            invalid_format_mask = nat_mask & non_empty_mask
-            invalid_count = invalid_format_mask.sum()
-
-            if invalid_count > 0:
-                print(f"    - ВНИМАНИЕ: {invalid_count} строк с НЕКОРРЕКТНЫМ ФОРМАТОМ даты")
-                invalid_dates = df_filtered[invalid_format_mask]['Date'].dropna().unique()
-                print(f"    - Уникальные значения с некорректным форматом даты ({len(invalid_dates)}):")
-                for i, inv_date in enumerate(invalid_dates[:10], 1):
-                    print(f"        {i}. {inv_date}")
-                if len(invalid_dates) > 10:
-                    print(f"        ... и ещё {len(invalid_dates) - 10} значений")
-            else:
-                print("    - Строк с некорректным форматом даты: 0")
-
-            cutoff_date = pd.to_datetime('2026-04-01')
-            date_mask = df_filtered['Date_parsed'] >= cutoff_date
-            df_filtered = df_filtered[date_mask]
-            df_filtered = df_filtered.drop('Date_parsed', axis=1)
-            print(f"    - Фильтр Date >= 01.04.2026: {initial_count} → {len(df_filtered)} строк")
-
-        except KeyError as e:
-            print(f"    - ОШИБКА: Колонка 'Date' не найдена: {e}")
-            return None
-        except TypeError as e:
-            print(f"    - ОШИБКА: Неверный тип данных в колонке 'Date': {e}")
-            return None
-        except ValueError as e:
-            print(f"    - ОШИБКА при преобразовании дат: {e}")
-            return None
-        except Exception as e:
-            print(f"    - НЕПРЕДВИДЕННАЯ ОШИБКА при фильтрации по дате: {e}")
-            print(f"      Тип: {type(e).__name__}")
-            return None
-
-    # Фильтр 4: Part Name (E) не содержит слово SOFTWARE
-    if 'Part Name (E)' in df_filtered.columns:
-        initial_count = len(df_filtered)
-        try:
-            software_mask = df_filtered['Part Name (E)'].astype(str).str.lower().str.contains('software', na=False)
-            df_filtered = df_filtered[~software_mask]
-            print(f"    - Фильтр Part Name (E) НЕ содержит 'SOFTWARE': {initial_count} → {len(df_filtered)} строк")
-        except KeyError as e:
-            print(f"    - ОШИБКА: Колонка 'Part Name (E)' не найдена: {e}")
-            return None
-        except AttributeError as e:
-            print(f"    - ОШИБКА: Не удалось обработать колонку 'Part Name (E)': {e}")
-            return None
-        except Exception as e:
-            print(f"    - НЕПРЕДВИДЕННАЯ ОШИБКА при фильтрации по Part Name (E): {e}")
-            print(f"      Тип: {type(e).__name__}")
-            return None
+    # Фильтр 4: Part Name (E) НЕ содержит слово SOFTWARE
+    initial_count = len(df_filtered)
+    software_mask = df_filtered['Part Name (E)'].str.lower().str.contains('software', na=False)
+    df_filtered = df_filtered[~software_mask]
+    print(f"    - Фильтр Part Name (E) НЕ содержит 'SOFTWARE': {initial_count} → {len(df_filtered)} строк")
 
     print(f"\n  После применения всех фильтров: {len(df_filtered)} строк")
 
@@ -703,49 +601,8 @@ def new_bp_check():
         print(f"    Тип ошибки: {type(e).__name__}")
         return None
 
-    # 5) Создание set по колонке BP_No из breakpoint_data.xlsx
+    # 5) Нахождение разницы (BP, которых нет в breakpoint_data)
     try:
-        if 'BP_No' not in df_source_breakpoint_data.columns:
-            print("  ОШИБКА: Колонка 'BP_No' не найдена в breakpoint_data.xlsx!")
-            available_cols = list(df_source_breakpoint_data.columns)
-            print(f"  Доступные колонки: {available_cols[:10]}..." if len(available_cols) > 10 else f"  Доступные колонки: {available_cols}")
-            return None
-
-        # Очистка данных: удаляем пустые значения и NaN
-        bp_no_series = df_source_breakpoint_data['BP_No'].dropna()
-        if bp_no_series.empty:
-            print("  ВНИМАНИЕ: Колонка 'BP_No' не содержит значений!")
-            set_bp_no = set()
-        else:
-            set_bp_no = set(bp_no_series.astype(str).str.strip())
-            set_bp_no = {bp for bp in set_bp_no if bp and bp != 'nan' and bp != 'None'}
-
-        print(f"\n  Уникальных BP из breakpoint_data: {len(set_bp_no)}")
-
-    except KeyError as e:
-        print(f"  ОШИБКА: Колонка 'BP_No' не найдена при создании set: {e}")
-        return None
-    except AttributeError as e:
-        print(f"  ОШИБКА: Не удалось обработать данные колонки 'BP_No': {e}")
-        return None
-    except ValueError as e:
-        print(f"  ОШИБКА: Неверный формат данных в колонке 'BP_No': {e}")
-        return None
-    except Exception as e:
-        print(f"  НЕПРЕДВИДЕННАЯ ОШИБКА при создании set BP_No: {e}")
-        print(f"    Тип ошибки: {type(e).__name__}")
-        return None
-
-    # 6) Нахождение разницы (BP, которых нет в breakpoint_data)
-    try:
-        # Проверяем, что set_bp и set_bp_no существуют
-        if 'set_bp' not in locals():
-            print("  ОШИБКА: set_bp не был создан!")
-            return None
-        if 'set_bp_no' not in locals():
-            print("  ОШИБКА: set_bp_no не был создан!")
-            return None
-
         new_bp_set = set_bp - set_bp_no
 
         print("\n" + "=" * 60)
@@ -1644,7 +1501,7 @@ def main():
 
     wait_for_user()
 
-    # Этап 1: Загрузка BOM файла
+    # ЭТАП 1: Загрузка BOM файла
     print("\n" + "=" * 60)
     print("ЭТАП 1: Загрузка BOM файла")
     print("=" * 60)
@@ -1677,7 +1534,7 @@ def main():
         print("\n  Действия пользователя:")
         print("    1. Скачайте из системы G-BOM Excel файлы для следующих BP:")
         for bp in sorted(new_bp_set):
-            print(f"       - {bp}")
+            print(f"       - BP{bp}")
         print("    2. Поместите скачанные файлы в текущую папку")
         print("    3. Убедитесь, что файлы имеют формат: BP<номер>.xlsx")
         print("\n  После скачивания файлов программа продолжит работу.")
@@ -1707,98 +1564,111 @@ def main():
         print("\n  Новых BP для обработки не найдено.")
         print("-" * 60)
         print("  ВОЗМОЖНОСТЬ РУЧНОГО ВВОДА BP:")
-        print("  Если вы уверены, что есть BP для обработки, но они не найдены автоматически,")
-        print("  вы можете ввести номера BP вручную.")
+        print("  Если вы хотите обработать конкретные BP, которые уже есть в папке,")
+        print("  вы можете указать их номера вручную.")
         print("-" * 60)
 
-        manual_input = input("\n  Хотите ввести BP номера вручную? (да/нет): ").strip().lower()
+        manual_input = input("\n  Хотите указать BP номера для обработки вручную? (да/нет): ").strip().lower()
 
         if manual_input == 'да':
             print("\n  ИНСТРУКЦИЯ ПО ВВОДУ BP НОМЕРОВ:")
-            print("    1. Вводите номера BP по одному (только цифры, без префикса 'BP')")
+            print("    1. Вводите номера BP в формате: BP26002813 (с префиксом 'BP')")
             print("    2. После ввода каждого номера нажмите Enter")
             print("    3. Для завершения ввода оставьте строку пустой и нажмите Enter")
-            print("    4. Пример: для BP12345 введите 12345")
+            print("    4. Пример: BP12345")
             print("-" * 60)
 
-            manual_bp_set = set()
+            manual_bp_files = []
 
             while True:
                 try:
-                    bp_input = input("\n  Введите номер BP (или Enter для завершения): ").strip()
+                    bp_input = input("\n  Введите номер BP (или Enter для завершения): ").strip().upper()
 
                     if bp_input == '':
-                        if len(manual_bp_set) == 0:
+                        if len(manual_bp_files) == 0:
                             print("  Не введено ни одного BP. Программа завершает работу.")
                             sys.exit(0)
                         break
 
-                    # Проверяем, что введены только цифры
-                    if bp_input.isdigit():
-                        manual_bp_set.add(bp_input)
-                        print(f"    → BP{bp_input} добавлен в список для обработки")
+                    # Проверяем формат: должен начинаться с BP и содержать только цифры после этого
+                    if bp_input.startswith('BP') and bp_input[2:].isdigit():
+                        # Добавляем .xlsx если нужно
+                        bp_filename = bp_input if bp_input.endswith('.xlsx') else f"{bp_input}.xlsx"
+                        
+                        # Проверяем, существует ли файл в текущей папке
+                        if os.path.exists(bp_filename):
+                            manual_bp_files.append(bp_filename)
+                            print(f"    → {bp_filename} добавлен в список для обработки")
+                        else:
+                            print(f"    ОШИБКА: Файл '{bp_filename}' не найден в текущей папке!")
+                            print("    Убедитесь, что файл скачан и находится в текущей директории.")
+                            continue
                     else:
-                        print(f"    ОШИБКА: '{bp_input}' не является номером BP (допустимы только цифры)")
-                        print("    Попробуйте снова (например: 12345)")
+                        print(f"    ОШИБКА: '{bp_input}' не является корректным номером BP")
+                        print("    Используйте формат: BP26002813")
+                        continue
 
                 except KeyboardInterrupt:
                     print("\n\nПрограмма прервана пользователем (Ctrl+C)")
                     sys.exit(0)
 
-            # Заменяем автоматически найденный set на ручной
-            new_bp_set = manual_bp_set
+            # Проверяем, что введены файлы
+            if not manual_bp_files:
+                print("\n  Не введено ни одного BP. Программа завершает работу.")
+                sys.exit(0)
+
+            # Устанавливаем список файлов для обработки
+            bp_files = manual_bp_files
             print("\n" + "=" * 60)
             print("  РУЧНОЙ ВВОД BP ЗАВЕРШЁН")
             print("=" * 60)
-            print(f"  Добавлено BP для обработки: {len(new_bp_set)}")
-            print("  Список BP для скачивания из G-BOM:")
-            for i, bp in enumerate(sorted(new_bp_set), 1):
-                print(f"    {i}. BP{bp}")
+            print(f"  Добавлено BP файлов для обработки: {len(bp_files)}")
+            for i, f in enumerate(bp_files, 1):
+                print(f"    {i}. {f}")
 
             wait_for_user("\n  Нажмите Enter, чтобы продолжить...")
 
-            # Проверяем, есть ли файлы в папке
-            expected_files = [f"BP{bp}.xlsx" for bp in new_bp_set]
-            missing_files = []
+            # Переходим к обработке файлов (пропускаем этап поиска BP файлов)
+            # Обработка каждого BP файла
+            processed_results = {}
 
-            print("\n  Проверка наличия файлов в текущей папке:")
-            for expected_file in expected_files:
-                if os.path.exists(expected_file):
-                    print(f"    {expected_file} - найден")
-                else:
-                    print(f"    {expected_file} - НЕ НАЙДЕН")
-                    missing_files.append(expected_file)
+            for i, bp_file in enumerate(bp_files, 1):
+                print("\n" + "=" * 60)
+                print(f"ОБРАБОТКА BP ФАЙЛА {i}/{len(bp_files)}: {bp_file}")
+                print("=" * 60)
 
-            if missing_files:
-                print("\n  ВНИМАНИЕ: Не все файлы найдены в текущей папке!")
-                print("  Отсутствуют:", missing_files)
-                print("\n  Действия пользователя:")
-                print("    1. Скачайте из системы G-BOM Excel файлы для указанных BP")
-                print("    2. Поместите скачанные файлы в текущую папку")
-                print("    3. Убедитесь, что файлы имеют формат: BP<номер>.xlsx")
+                print(f"\nТекущий файл: {bp_file}")
 
-                wait_for_user("\n  Нажмите Enter, когда все файлы будут скачаны и помещены в текущую папку...")
+                wait_for_user("\nНажмите Enter для начала обработки этого файла...")
 
-                # Повторная проверка
-                still_missing = []
-                for expected_file in expected_files:
-                    if not os.path.exists(expected_file):
-                        still_missing.append(expected_file)
+                result = process_bp_file(bp_file, df_bom)
+                if result:
+                    processed_results[result['bp_number']] = result['dataframe']
 
-                if still_missing:
-                    print("\n  Предупреждение: Следующие файлы всё ещё не найдены:")
-                    for file in still_missing:
-                        print(f"    - {file}")
-                    proceed = input("\n  Продолжить с имеющимися файлами? (да/нет): ").strip().lower()
-                    if proceed != 'да':
-                        print("  Программа завершена. Скачайте недостающие файлы и запустите снова.")
-                        sys.exit(0)
+                if i < len(bp_files):
+                    wait_for_user("\nФайл обработан. Нажмите Enter для перехода к следующему файлу...")
+
+            # Итоги
+            print("\n" + "=" * 60)
+            print("ОБРАБОТКА ЗАВЕРШЕНА")
+            print("=" * 60)
+            print(f"\nОбработано файлов: {len(processed_results)}/{len(bp_files)}")
+
+            if processed_results:
+                print("\nОбработанные Breakpoint'ы:")
+                for bp_number in processed_results:
+                    print(f"   - {bp_number}")
+                return processed_results
+
+            print("\nНе обработано ни одного файла.")
+            return None
+
         else:
             print("\n  Программа завершает работу.")
             wait_for_user()
             sys.exit(0)
 
-    # Этап 3: Поиск BP файлов
+    # ЭТАП 3: Поиск BP файлов
     print("\n" + "=" * 60)
     print("ЭТАП 3: Поиск BP файлов")
     print("=" * 60)

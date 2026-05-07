@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# pylint: disable=line-too-long
+# pylint: disable=too-many-lines
 """
 Модуль bp_summary последовательно преобразует
 обработанные BP DataFrame
