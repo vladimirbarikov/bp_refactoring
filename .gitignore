@@ -11,6 +11,7 @@ bp_venv/
 # excel source data
 *.xlsx
 *.scv
+*.xlsx:Zone.Identifier
 
 # python configuration
 .pylintrc
