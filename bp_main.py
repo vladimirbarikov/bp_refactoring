@@ -18,6 +18,23 @@ from bp_refactoring import main as refactoring_main
 from bp_summary import main as summary_main
 
 
+def clear_screen():
+    """Очистка экрана консоли"""
+    os.system('cls' if os.name == 'nt' else 'clear')
+
+
+def wait_for_user(prompt="\nНажмите Enter для продолжения..."):
+    """Ожидание нажатия Enter"""
+    try:
+        input(prompt)
+    except KeyboardInterrupt:
+        print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+        sys.exit(0)
+    except EOFError:
+        print("\n\nОбнаружен конец ввода. Программа завершена.")
+        sys.exit(0)
+
+
 def find_latest_breakpoint_file(file_prefix: str = 'breakpoint_data') -> Optional[str]:
     """
     Находит файл breakpoint_data с самой поздней датой в имени
@@ -376,6 +393,59 @@ def save_processed_dataframe(
 
 def main():
     """Главная функция"""
+    clear_screen()
+
+    print("""
+        ╔══════════════════════════════════════════════════════════════╗
+        ║               BREAKPOINT REFACTORING TOOL V1.0               ║
+        ║                          ----------                          ║
+        ║      ПРИЛОЖЕНИЕ ДЛЯ ОБРАБОТКИ ТЕХНИЧЕСКИХ ИЗМЕНЕНИЙ V1.0     ║
+        ╚══════════════════════════════════════════════════════════════╝
+        """)
+
+    print("\nИнструкция:")
+    print("   1. Программа предназначена для обработки технических изменений - Breakpoint (BP)")
+    print("   2. Программа разделена на 3 этапа:")
+    print("      2.1. Пошаговая Обработка Excel файлов BP")
+    print("      2.2. Пошаговое формирование итоговой таблицы")
+    print("           • Разделение деталей по парам 'До / После изменения'")
+    print("      2.3. Сохранение итоговой таблицы в Excel файл 'ГГГГ-ММ-ДД_breakpoint_data.xlsx'")
+    print("   3. Перед обрабаткой программа проверит имеются ли BP для скачивания из системы G-BOM")
+    print("   4. Программа будет обрабатывать Excel файлы по одному")
+    print("   5. Для каждого перевода нужно будет ввести русскую версию")
+    print("   6. После каждого шага Вам предоставляется возможность проверить внесенные изменения:")
+    print("      6.1. Если внесенные изменения корректны, нажмите Enter")
+    print("      6.2. Если внесенные изменения некорректны, введите 'retry'")
+    print("      6.3. 'retry' отменит внесенные изменения и Вы сможете исправить неточность")
+    print("      6.4. После исправления нажмите Enter")
+    print("      6.5. Нажмите Enter, чтобы пропустить шаг и оставить его без изменений")
+    print("   7. Нажмите клавиши Ctrl+C, чтобы прервать работу программы")
+    print("\nТРЕБОВАНИЯ:")
+    print("   1. Пользователь должен иметь доступ к системе G-BOM")
+    print("      • Если у Вас нет доступа к системе G-BOM, обратитесь в PLD/ED:")
+    print("        → Бариков Владимир / Barikov Vladimir")
+    print("        → Ермолаева Мая / Ermolaeva Maya")
+    print("   2. Пользователь должен иметь доступ к системе SCM")
+    print("      • Если у Вас нет доступа к системе SCM, обратитесь в PLD/WL:")
+    print("        → Федин Антон / Fedin Anton")
+    print("   3. Пользователь должен иметь доступ к мессенджеру DingTalk")
+    print("      • Информация по Breakpoint рассылается в 2 чатах DingTalk:")
+    print("        → Break Point (BP) - админ: Алексеева Елизавета / Alekseeva Elizaveta (MD/PM)")
+    print("        → Breakpoint PLD Info - админ: Бариков Владимир / Barikov Vladimir (PLD/ED)")
+    print("   3. Все Excel файлы должны находится в рабочей папке")
+    print("      • Путь к рабочей папке:")
+    print(f"       → {os.getcwd}")
+    print("      • 'ГГГГ-ММ-ДД_breakpoint_data.xlsx'")
+    print("      • 'bp_list_2025-2026.xlsx'")
+    print("      • 'bom.xlsx'")
+    print("      • 'configuration.xlsx'")
+    print("      • 'BP***.xlsx'")
+    print("\n\n***В случае некорректной работы программы обращаться к разработчику:")
+    print("       • В мессенджере DingTalk:")
+    print("         → Бариков Владимир / Barikov Vladimir (PLD/ED)")
+
+    wait_for_user()
+
     print("=" * 70)
     print("ЗАПУСК BP REFACTORING TOOL")
     print("=" * 70)
