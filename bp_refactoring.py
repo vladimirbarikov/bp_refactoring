@@ -4,7 +4,46 @@
 # pylint: disable=too-many-lines
 """
 BP Refactoring Tool - Пошаговая обработка Excel файлов
-Использование: python bp_refactoring.py
+
+Этот модуль отвечает за загрузку и обработку индивидуальных Excel файлов
+
+Breakpoint (BP). Он выполняет 18 последовательных шагов обработки:
+    1. Загрузка BP файла
+    2. Выбор нужных колонок
+    3. Выбор статуса технического изменения
+    4. Заполнение пустых значений
+    5. Ввод количества деталей в SS
+    6. Перевод названий деталей
+    7. Поиск официальных названий поставщиков
+    8. Ввод статуса локализации поставщиков
+    9. Фильтрация китайских символов
+    10. Перевод описания к изменению
+    11. Перевод решения к изменению
+    12. Обработка цветов и Color Code
+    13. Обработка рабочих центров
+    14. Перевод требований по утилизации старых деталей
+    15. Перевод требований по взаимозаменяемости
+    16. Проверка наличия деталей в BOM
+    17. Упорядочивание колонок
+    18. Сохранение результата
+
+Каждый шаг включает:
+    - Интерактивное взаимодействие с пользователем для ввода переводов
+    - Возможность отменить изменения и повторить шаг (режим retry)
+    - Сохранение состояния перед каждым шагом для возможности восстановления
+
+Модуль также содержит логику определения новых BP через сравнение
+с existing breakpoint_data и bp_list_2025-2026.xlsx.
+
+Использование:
+    from bp_refactoring import main as refactoring_main
+
+Версия: 1.0
+Совместимость: Python 3.12.3+, Pandas 3.0.2+, OpenPyXL 3.1.5+
+Поддержка: PLD Engineering Center
+Дата создания: 2026-05-07
+Лицензия: MIT
+Статус: Production
 """
 import io
 import os
@@ -21,6 +60,7 @@ from openpyxl.utils.exceptions import InvalidFileException
 
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
+# Для Windows консоли
 if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
@@ -31,7 +71,14 @@ def safe_str_convert(
         default=''
     ) -> str:
     """
-    Безопасное преобразование значения в строку
+    Безопасно преобразует значение в строку, обрабатывая None и ошибки.
+
+    Аргументы:
+        value: Значение для преобразования.
+        default (str): Значение по умолчанию при ошибке. По умолчанию ''.
+
+    Возвращается:
+        str: Преобразованная строка или значение по умолчанию.
     """
     if value is None:
         return default
@@ -47,7 +94,20 @@ def safe_date_convert(
         pattern: str = '%Y-%m-%d'
     ) -> Optional[datetime]:
     """
-    Безопасное преобразование значения в дату
+    Безопасно преобразует значение в дату, обрабатывая различные форматы.
+
+    Поддерживает:
+    - datetime объекты (возвращаются как есть)
+    - строки в заданном формате
+    - числовые timestamp'ы
+
+    Аргументы:
+        value: Значение для преобразования.
+        default: Значение по умолчанию при ошибке. По умолчанию None.
+        pattern (str): Формат строки даты. По умолчанию '%Y-%m-%d'.
+
+    Возвращается:
+        Optional[datetime]: Объект datetime или значение по умолчанию.
     """
     try:
         if isinstance(value, datetime):
@@ -62,7 +122,14 @@ def safe_date_convert(
 
 
 def wait_for_user(prompt="\nНажмите Enter для продолжения..."):
-    """Ожидание нажатия Enter"""
+    """
+    Ожидает нажатия клавиши Enter от пользователя.
+
+    Обрабатывает Ctrl+C и EOF для корректного завершения программы.
+
+    Аргументы:
+        prompt (str): Текст приглашения к вводу.
+    """
     try:
         input(prompt)
     except KeyboardInterrupt:
@@ -74,7 +141,14 @@ def wait_for_user(prompt="\nНажмите Enter для продолжения..
 
 
 def print_step_header(step_num, total_steps, description):
-    """Вывод заголовка шага"""
+    """
+    Выводит форматированный заголовок шага обработки.
+
+    Аргументы:
+        step_num (int): Номер текущего шага.
+        total_steps (int): Общее количество шагов.
+        description (str): Описание шага.
+    """
     print("\n" + "=" * 60)
     print(f"ШАГ {step_num}/{total_steps}: {description}")
     print("=" * 60)
@@ -82,8 +156,13 @@ def print_step_header(step_num, total_steps, description):
 
 def save_state_before_step(df):
     """
-    Сохраняет состояние DataFrame перед выполнением шага
-    Возвращает сохранённую копию DataFrame
+    Сохраняет состояние DataFrame перед выполнением шага для возможности отката.
+
+    Аргументы:
+        df (pd.DataFrame): DataFrame для сохранения.
+
+    Возвращается:
+        pd.DataFrame: Глубокая копия DataFrame или None, если df=None.
     """
     if df is not None:
         print("  [Сохранено состояние перед шагом]")
@@ -93,8 +172,14 @@ def save_state_before_step(df):
 
 def restore_state(saved_df, step_name):
     """
-    Восстанавливает сохранённое состояние DataFrame
-    Возвращает восстановленный DataFrame
+    Восстанавливает сохранённое состояние DataFrame.
+
+    Аргументы:
+        saved_df (pd.DataFrame): Сохранённый DataFrame.
+        step_name (str): Имя шага для вывода сообщения.
+
+    Возвращается:
+        pd.DataFrame: Восстановленный DataFrame или None при ошибке.
     """
     if saved_df is not None:
         print(f"  [Восстанавливаем состояние перед шагом: {step_name}]")
@@ -104,7 +189,25 @@ def restore_state(saved_df, step_name):
 
 
 def load_excel_file(filename, description="файл"):
-    """Загрузка Excel файла с проверкой существования"""
+    """
+    Загружает Excel файл с полной обработкой ошибок и проверкой существования.
+
+    Обрабатываемые ошибки:
+        - FileNotFoundError
+        - PermissionError (файл открыт в Excel)
+        - EmptyDataError (пустой файл)
+        - ParserError (повреждённый формат)
+        - InvalidFileException (некорректный Excel файл)
+        - ValueError (неопределённый формат)
+        - Общие исключения
+
+    Аргументы:
+        filename (str): Имя файла для загрузки.
+        description (str): Описание файла для вывода сообщений.
+
+    Возвращается:
+        pd.DataFrame: Загруженный DataFrame или None при ошибке.
+    """
     if not os.path.exists(filename):
         print(f"Ошибка: {description} '{filename}' не найден в текущей папке!")
         print(f"Текущая директория: {os.getcwd()}")
@@ -141,13 +244,18 @@ def load_excel_file(filename, description="файл"):
         return None
 
 
-def show_dataframe_preview(df, step_name, max_rows=5, focus_columns=None, max_colwidth=40):
+def show_dataframe_preview(df, step_name, max_rows=10, focus_columns=None, max_colwidth=40):
     """
-    Отображает первые строки DataFrame для визуального контроля
-    step_name: название шага
-    max_rows: количество строк для отображения
-    focus_columns: список колонок для отображения (если None - показывает первые 5)
-    max_colwidth: максимальная ширина содержимого колонки в символах
+    Отображает первые строки DataFrame для визуального контроля результатов шага.
+
+    Аргументы:
+        df (pd.DataFrame): DataFrame для отображения.
+        step_name (str): Имя шага для вывода в заголовке.
+        max_rows (int): Максимальное количество строк для отображения. По умолчанию 5.
+        focus_columns (list, optional): Список колонок для отображения.
+                                        Если None, показываются первые 5 колонок.
+        max_colwidth (int): Максимальная ширина содержимого колонки в символах.
+                            По умолчанию 40.
     """
     if df is None or df.empty:
         print(f"\n[Preview после шага: {step_name}]")
@@ -192,7 +300,18 @@ def show_dataframe_preview(df, step_name, max_rows=5, focus_columns=None, max_co
 
 
 def filter_chinese_lines(text):
-    """Фильтрация китайских иероглифов"""
+    """
+    Фильтрует китайские иероглифы из текста.
+
+    Для многострочного текста собирает строки с китайскими иероглифами.
+    Для однострочного текста обрезает всё после последнего китайского иероглифа.
+
+    Аргументы:
+        text: Текст для фильтрации (может быть не строкой).
+
+    Возвращается:
+        str: Отфильтрованный текст или исходное значение, если не строка.
+    """
     if not isinstance(text, str):
         return text
 
@@ -215,7 +334,17 @@ def filter_chinese_lines(text):
 
 
 def extract_parentheses_content(text):
-    """Извлечение содержимого скобок"""
+    """
+    Извлекает содержимое скобок из текста.
+
+    Поддерживает как круглые скобки (), так и китайские （）.
+
+    Аргументы:
+        text: Текст для обработки (может быть NaN).
+
+    Возвращается:
+        str: Содержимое скобок (объединённое через пробел) или исходный текст.
+    """
     if pd.isna(text):
         return text
 
@@ -230,8 +359,17 @@ def extract_parentheses_content(text):
 
 def fill_empty_values_with_dash(df, columns):
     """
-    Заполняет пустые значения в указанных колонках на '-'
-    Возвращает список колонок, в которых были замены
+    Заполняет пустые значения в указанных колонках символом '-'.
+
+    Аргументы:
+        df (pd.DataFrame): DataFrame для обработки.
+        columns (list): Список названий колонок для обработки.
+
+    Возвращается:
+        list: Список колонок, в которых были выполнены замены.
+
+    Примечание:
+        Пустыми считаются значения: None, NaN, пустая строка, 'nan', 'None'.
     """
     columns_with_replacements = []
 
@@ -255,7 +393,16 @@ def fill_empty_values_with_dash(df, columns):
 
 
 def get_unique_non_empty_values(series, column_name):
-    """Получает уникальные значения из серии, исключая '-' и пустые значения"""
+    """
+    Получает уникальные значения из серии, исключая пустые значения и '-'.
+
+    Аргументы:
+        series (pd.Series): Серия для анализа.
+        column_name (str): Имя колонки для вывода сообщений.
+
+    Возвращается:
+        list: Список уникальных непустых значений.
+    """
     series = series.astype(str)
     unique_values = series.dropna().unique()
     filtered_values = [v for v in unique_values if v != '-' and v != 'nan' and str(v).strip() != '']
@@ -268,10 +415,22 @@ def get_unique_non_empty_values(series, column_name):
 
 def interactive_translation(data, field_name, examples=None):
     """
-    Интерактивный ввод переводов
-    data: список уникальных значений для перевода
-    field_name: название поля (для вывода)
-    examples: примеры переводов (словарь)
+    Интерактивный ввод переводов для списка уникальных значений.
+
+    Пользователь может:
+    - Ввести перевод → значение будет заменено
+    - Нажать Enter без ввода → значение останется оригинальным
+
+    Аргументы:
+        data (list): Список уникальных значений для перевода.
+        field_name (str): Название поля для вывода (например, "названий деталей").
+        examples (dict, optional): Словарь примеров переводов для отображения.
+
+    Возвращается:
+        dict: Словарь соответствий {оригинал: перевод}.
+
+    Примечание:
+        Функция отображает все значения перед началом ввода.
     """
     if not data or len(data) == 0:
         return {}
@@ -325,7 +484,15 @@ def interactive_translation(data, field_name, examples=None):
 
 
 def find_bp_files():
-    """Поиск BP файлов в текущей папке"""
+    """
+    Ищет BP файлы в текущей папке.
+
+    Файлы должны соответствовать шаблону: BP*.xlsx
+    Временные файлы (~$BP*.xlsx) игнорируются.
+
+    Возвращается:
+        list: Отсортированный список найденных BP файлов.
+    """
     bp_files = []
     try:
         for file in os.listdir('.'):
@@ -344,13 +511,16 @@ def find_bp_files():
 
 def find_latest_breakpoint_file(file_prefix: str = 'breakpoint_data') -> Optional[str]:
     """
-    Находит файл breakpoint_data с самой поздней датой в имени
+    Находит файл breakpoint_data с самой поздней датой в имени.
 
-    Args:
-        file_prefix: префикс имени файла
+    Аргументы:
+        file_prefix (str): Префикс имени файла для поиска.
 
-    Returns:
-        Имя самого свежего файла или None, если файлы не найдены
+    Возвращается:
+        Optional[str]: Имя самого свежего файла или None, если файлы не найдены.
+
+    Примечание:
+        bp_main.find_latest_breakpoint_file - аналогичная функция в главном модуле
     """
     pattern = rf"[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}_{file_prefix}\.xlsx"
 
@@ -376,8 +546,13 @@ def find_latest_breakpoint_file(file_prefix: str = 'breakpoint_data') -> Optiona
 
 def load_latest_breakpoint_data(file_prefix: str = 'breakpoint_data') -> Optional[pd.DataFrame]:
     """
-    Загружает самый свежий файл breakpoint_data с датой в имени
-    Возвращает DataFrame или None, если файлы не найдены
+    Загружает самый свежий файл breakpoint_data с датой в имени.
+
+    Аргументы:
+        file_prefix (str): Префикс имени файла для поиска.
+
+    Возвращается:
+        Optional[pd.DataFrame]: DataFrame с данными или None, если файлы не найдены.
     """
     latest_file = find_latest_breakpoint_file(file_prefix)
 
@@ -420,8 +595,24 @@ def load_latest_breakpoint_data(file_prefix: str = 'breakpoint_data') -> Optiona
 
 def new_bp_check():
     """
-    Проверка новых BP из списка bp_list_2025-2026.xlsx и breakpoint_data.xlsx
-    Возвращает set номеров BP, которые нужно скачать из G-BOM
+    Проверяет наличие новых BP для скачивания из системы G-BOM.
+
+    Алгоритм:
+    1. Загружает bp_list_2025-2026.xlsx
+    2. Загружает последний файл breakpoint_data.xlsx
+    3. Применяет фильтры к списку BP:
+       - IsUnBomBP = "No"
+       - Status != 'Closed'
+       - Date >= 01.04.2026 или пустая дата
+       - Part Name (E) не содержит "SOFTWARE"
+    4. Находит разницу между BP в отфильтрованном списке и уже обработанными
+
+    Возвращается:
+        set: Множество номеров BP, которые нужно скачать, или None при ошибке.
+
+    Требования:
+        - Файл bp_list_2025-2026.xlsx должен существовать в текущей папке
+        - Доступ к файлу для чтения
     """
 
     # Проверка наличия файлов перед загрузкой
@@ -633,8 +824,22 @@ def new_bp_check():
 
 def confirm_step(step_name, df_bp_new, saved_state):
     """
-    Запрашивает у пользователя подтверждение после выполнения шага
-    Возвращает (continue_flag, df, new_saved_state)
+    Запрашивает у пользователя подтверждение после выполнения шага.
+
+    Поддерживает:
+    - Enter: подтверждение, сохранение нового состояния
+    - 'retry': отмена изменений и повтор шага
+
+    Аргументы:
+        step_name (str): Имя шага для вывода сообщений.
+        df_bp_new (pd.DataFrame): Текущий DataFrame после выполнения шага.
+        saved_state (pd.DataFrame): Сохранённое состояние перед шагом.
+
+    Возвращается:
+        tuple: (continue_flag, df, new_saved_state)
+            - continue_flag (bool): True если нужно продолжить, False если retry
+            - df (pd.DataFrame): Текущий или восстановленный DataFrame
+            - new_saved_state (pd.DataFrame): Новое сохранённое состояние
     """
     print(f"\n  Шаг '{step_name}' выполнен.")
     try:
@@ -665,8 +870,19 @@ def confirm_step(step_name, df_bp_new, saved_state):
 
 def get_bp_status(bp_number):
     """
-    Запрашивает у пользователя статус для BP файла
-    Возвращает строку со статусом
+    Запрашивает у пользователя статус для BP файла.
+
+    Доступные варианты:
+    1. Согласован/Approved
+    2. Опубликован/Published
+    3. Закрыт/Closed
+    4. Другое (ввод вручную)
+
+    Аргументы:
+        bp_number (str): Номер BP для вывода в сообщении.
+
+    Возвращается:
+        str: Выбранный статус (с возможным переводом строки для двустрочного формата).
     """
     print(f"\n  Для BP файла {bp_number} укажите статус обработки:")
     print("  Доступные варианты:")
@@ -699,7 +915,7 @@ def classify_row_for_quantity_ss(row: pd.Series) -> str:
     """
     Классифицирует строку для определения, нужно ли вводить количество в SS.
     Количество в SS вводится ТОЛЬКО для старых деталей (Delete).
-    
+
     Алгоритм:
     1. Приоритет 1: колонка 'Change'
         - 'Before Change' → Before
@@ -709,6 +925,12 @@ def classify_row_for_quantity_ss(row: pd.Series) -> str:
         - 'Add' → After (новая деталь)
         - 'Replace' → After (новая деталь)
         - 'Update' → After (новая деталь)
+
+    Аргументы:
+        row (pd.Series): Строка DataFrame для классификации.
+
+    Возвращается:
+        str: 'Before' (требует ввода количества) или 'After' (не требует).
     """
     change_val = safe_str_convert(row.get('Change', ''))
 
@@ -731,11 +953,20 @@ def classify_row_for_quantity_ss(row: pd.Series) -> str:
 
 def get_quantity_in_ss(df_bp_new, bp_number):
     """
-    Интерактивный ввод количества деталей в SS (ТОЛЬКО для СТАРЫХ ДЕТАЛЕЙ).
-    Пользователь вводит номер детали и количество для неё.
-    Можно ввести несколько деталей.
-    Enter без ввода номера детали устанавливает 0 для всех оставшихся деталей.
-    Возвращает словарь {Part No.: количество}
+    Интерактивный ввод количества деталей в SS для СТАРЫХ ДЕТАЛЕЙ (Delete).
+
+    Пользователь:
+    - Вводит номер детали
+    - Вводит количество (целое число)
+    - Можно ввести несколько деталей последовательно
+    - Enter без ввода номера устанавливает 0 для всех оставшихся деталей
+
+    Аргументы:
+        df_bp_new (pd.DataFrame): DataFrame с данными BP.
+        bp_number (str): Номер BP для вывода.
+
+    Возвращается:
+        dict: Словарь {Part No.: количество} для деталей Delete.
     """
     # Определяем, какие строки требуют ввода количества в SS (только Delete = Before)
     df_bp_new['_need_quantity'] = df_bp_new.apply(classify_row_for_quantity_ss, axis=1)
@@ -853,8 +1084,19 @@ def get_quantity_in_ss(df_bp_new, bp_number):
 
 def get_supplier_localization_status(df_bp_new, bp_number):
     """
-    Интерактивный ввод статуса локализации для каждого уникального поставщика
-    Возвращает DataFrame с добавленной колонкой 'Localization'
+    Интерактивный ввод статуса локализации для каждого уникального поставщика.
+
+    Доступные статусы:
+    - 1: Да (локальный поставщик) → "Да\nYes"
+    - 2: Нет (зарубежный поставщик) → "Нет\nNo"
+    - Enter: пустое значение
+
+    Аргументы:
+        df_bp_new (pd.DataFrame): DataFrame с данными BP.
+        bp_number (str): Номер BP для вывода.
+
+    Возвращается:
+        pd.DataFrame: DataFrame с добавленной колонкой 'Localization'.
     """
     print(f"\n  Ввод статуса локализации поставщиков для BP {bp_number}")
 
@@ -931,8 +1173,14 @@ def get_supplier_localization_status(df_bp_new, bp_number):
 def translate_production_part_disposal(df_bp_new, bp_number):
     """
     Интерактивный перевод значений колонки 'Production Part Disposal'
-    Возвращает DataFrame с обновлённой колонкой 'Production Part Disposal'
-    Формат: перевод\nоригинал
+    Формат сохранения: "перевод\nоригинал"
+
+    Аргументы:
+        df_bp_new (pd.DataFrame): DataFrame с данными BP.
+        bp_number (str): Номер BP для вывода.
+
+    Возвращается:
+        pd.DataFrame: DataFrame с обновлённой колонкой 'Production Part Disposal'.
     """
     print(f"\n  Перевод значений 'Production Part Disposal' для BP {bp_number}")
 
@@ -994,9 +1242,15 @@ def translate_production_part_disposal(df_bp_new, bp_number):
 
 def translate_interchangeable(df_bp_new, bp_number):
     """
-    Интерактивный перевод значений колонки 'Interchangeable'
-    Возвращает DataFrame с обновлённой колонкой 'Interchangeable'
-    Формат: перевод\nоригинал
+    Интерактивный перевод значений колонки 'Interchangeable'.
+    Формат сохранения: "перевод\nоригинал"
+
+    Аргументы:
+        df_bp_new (pd.DataFrame): DataFrame с данными BP.
+        bp_number (str): Номер BP для вывода.
+
+    Возвращается:
+        pd.DataFrame: DataFrame с обновлённой колонкой 'Interchangeable'.
     """
     print(f"\n  Перевод значений 'Interchangeable' для BP {bp_number}")
 
@@ -1058,7 +1312,40 @@ def translate_interchangeable(df_bp_new, bp_number):
 
 def process_bp_file(bp_filename, df_bom):
     """
-    Обработка одного BP файла
+    Обработка одного BP файла через 18 последовательных шагов.
+
+    Каждый шаг включает:
+    - Интерактивное взаимодействие с пользователем
+    - Возможность отката (retry)
+    - Сохранение состояния
+
+    Аргументы:
+        bp_filename (str): Имя файла BP для обработки.
+        df_bom (pd.DataFrame): DataFrame с данными BOM для проверки наличия деталей.
+
+    Возвращается:
+        dict: Словарь вида {'bp_number': str, 'dataframe': pd.DataFrame}
+              или None при критической ошибке.
+
+    Шаги обработки:
+        1. Загрузка BP файла
+        2. Выбор нужных колонок
+        3. Выбор статуса тех. изменения
+        4. Заполнение пустых значений
+        5. Ввод количества деталей в SS
+        6. Перевод названий деталей
+        7. Поиск официальных названий поставщиков
+        8. Ввод статуса локализации поставщиков
+        9. Фильтрация китайских символов
+        10. Перевод описания к изменению
+        11. Перевод решения к изменению
+        12. Обработка цветов и Color Code
+        13. Обработка рабочих центров
+        14. Перевод требований по утилизации старых деталей
+        15. Перевод требований по взаимозаменяемости
+        16. Проверка наличия деталей в BOM
+        17. Упорядочивание колонок
+        18. Сохранение результата
     """
     print(f"\nОбработка файла: {bp_filename}")
 
@@ -1421,11 +1708,11 @@ def process_bp_file(bp_filename, df_bom):
     # Шаг 17: Упорядочивание колонок
     print_step_header(17, 18, "Упорядочивание колонок")
     bp_columns_order = [
-    'BP_No', 'Status', 'In Stock', 'New Part Available Date', 'BOM Product',
-    'Change', 'Update Type', 'Is in BOM', 'Part No.', 'Part Name (RUS)', 'Quantity',
-    'Quantity in SS', 'Workcenter No.', 'Workcenter Name', 'Production Part Disposal',
-    'Interchangeable', 'Supplier Name (RUS)', 'Localization', 'Change Description (RUS)', 'Solution (RUS)',
-    'Color Code', 'Color Name (RUS)'
+        'BP_No', 'Status', 'In Stock', 'New Part Available Date', 'BOM Product',
+        'Change', 'Update Type', 'Is in BOM', 'Part No.', 'Part Name (RUS)', 'Quantity',
+        'Quantity in SS', 'Workcenter No.', 'Workcenter Name', 'Production Part Disposal',
+        'Interchangeable', 'Supplier Name (RUS)', 'Localization', 'Change Description (RUS)', 'Solution (RUS)',
+        'Color Code', 'Color Name (RUS)'
     ]
 
     existing_cols = [col for col in bp_columns_order if col in df_bp_new.columns]
@@ -1457,7 +1744,28 @@ def process_bp_file(bp_filename, df_bom):
 
 
 def main():
-    """Главная функция программы"""
+    """
+    Главная функция модуля bp_refactoring.
+
+    Выполняет пошаговую обработку Excel файлов BP.
+
+    Этапы:
+        1. Загрузка BOM файла (обязательно)
+        2. Проверка новых BP в системе
+        3. Поиск BP файлов
+        4. Пошаговая обработка каждого найденного BP файла
+        5. Возврат словаря обработанных DataFrame'ов
+
+    При отсутствии новых BP предоставляет возможность ручного ввода
+    номеров BP для обработки.
+
+    Возвращается:
+        dict: Словарь обработанных DataFrame'ов, где ключ - номер BP,
+              значение - обработанный DataFrame, или None при отсутствии обработки.
+
+    Исключения:
+        SystemExit: при критических ошибках (отсутствие BOM файла и т.д.)
+    """
     print("""
         ╔══════════════════════════════════════════════════════════════╗
         ║                                                              ║
@@ -1514,7 +1822,7 @@ def main():
         print("\n  Действия пользователя:")
         print("    1. Скачайте из системы G-BOM Excel файлы для следующих BP:")
         for bp in sorted(new_bp_set):
-            print(f"       - BP{bp}")
+            print(f"       - {bp}")
         print("    2. Поместите скачанные файлы в текущую папку")
         print("    3. Убедитесь, что файлы имеют формат: BP<номер>.xlsx")
         print("\n  После скачивания файлов программа продолжит работу.")
@@ -1522,7 +1830,7 @@ def main():
         wait_for_user("\n  Нажмите Enter, когда все файлы будут скачаны и помещены в текущую папку...")
 
         # Проверяем, появились ли файлы
-        expected_files = [f"BP{bp}.xlsx" for bp in new_bp_set]
+        expected_files = [f"{bp}.xlsx" for bp in new_bp_set]
         missing_files = []
 
         print("\n  Проверка наличия скачанных файлов:")
@@ -1700,15 +2008,3 @@ def main():
 
     print("\nНе обработано ни одного файла.")
     return None
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\n\nПрограмма прервана пользователем")
-        sys.exit(0)
-    except BrokenPipeError:
-        devnull = os.open(os.devnull, os.O_WRONLY)
-        os.dup2(devnull, sys.stdout.fileno())
-        sys.exit(1)

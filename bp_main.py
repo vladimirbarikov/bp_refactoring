@@ -4,11 +4,34 @@
 # pylint: disable=too-many-lines
 """
 BP Refactoring Tool - Точка входа
+
+Этот модуль является главной точкой входа в приложение Breakpoint Refactoring Tool.
+
+Он координирует выполнение всех этапов обработки технических изменений:
+    1. Проверка наличия новых BP для скачивания из системы G-BOM
+    2. Пошаговая обработка Excel файлов BP через модуль bp_refactoring
+    3. Формирование итоговой сводной таблицы через модуль bp_summary
+    4. Сохранение результата в Excel файл с форматированием
+
+Модуль обеспечивает:
+    - Интерактивное взаимодействие с пользователем через консоль
+    - Сохранение состояния обработки между запусками
+    - Автоматическую загрузку последнего обработанного файла
+    - Форматирование выходного Excel файла с заданными стилями
+
+Версия: 1.0
+Совместимость: Python 3.12.3+, Pandas 3.0.2+, OpenPyXL 3.1.5+
+Поддержка: PLD Engineering Center
+Дата создания: 2026-05-07
+Лицензия: MIT
+Статус: Production
 """
-import sys
+import io
 import os
 import re
+import sys
 import traceback
+import warnings
 from datetime import datetime
 from typing import Optional
 
@@ -17,14 +40,33 @@ import pandas as pd
 from bp_refactoring import main as refactoring_main
 from bp_summary import main as summary_main
 
+warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
+
+# Для Windows консоли
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 
 def clear_screen():
-    """Очистка экрана консоли"""
+    """
+    Очистка экрана консоли
+    Использует системную команду 'cls' для Windows или 'clear' для Unix-подобных систем.
+    """
     os.system('cls' if os.name == 'nt' else 'clear')
 
 
 def wait_for_user(prompt="\nНажмите Enter для продолжения..."):
-    """Ожидание нажатия Enter"""
+    """
+    Ожидает нажатия клавиши Enter от пользователя.
+
+    Аргументы:
+        prompt (str): Текст приглашения к вводу. По умолчанию содержит инструкцию.
+
+    Обрабатывается:
+        - KeyboardInterrupt (Ctrl+C) - завершает программу
+        - EOFError - завершает программу при обнаружении конца ввода
+    """
     try:
         input(prompt)
     except KeyboardInterrupt:
@@ -37,12 +79,15 @@ def wait_for_user(prompt="\nНажмите Enter для продолжения..
 
 def find_latest_breakpoint_file(file_prefix: str = 'breakpoint_data') -> Optional[str]:
     """
-    Находит файл breakpoint_data с самой поздней датой в имени
+    Находит файл breakpoint_data с самой поздней датой в имени.
+    Функция ищет в текущей директории файлы, соответствующие шаблону:
+    ГГГГ-ММ-ДД_breakpoint_data.xlsx и возвращает самый свежий по дате.
     
-    Args:
-        file_prefix: префикс имени файла
+    Аргументы:
+        file_prefix (str): Префикс имени файла для поиска.
+                           По умолчанию 'breakpoint_data'.
     
-    Returns:
+    Возвращается:
         Имя самого свежего файла или None, если файлы не найдены
     """
     pattern = rf"[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}_{file_prefix}\.xlsx"
@@ -75,8 +120,22 @@ def find_latest_breakpoint_file(file_prefix: str = 'breakpoint_data') -> Optiona
 
 def load_breakpoint_data(file_prefix: str = 'breakpoint_data') -> Optional[pd.DataFrame]:
     """
-    Загружает самый свежий файл breakpoint_data с датой в имени
-    Возвращает DataFrame или None, если файлы не найдены
+    Загружает самый свежий файл breakpoint_data с датой в имени.
+
+    Функция автоматически находит последний сохранённый файл с историей
+    и загружает его как DataFrame. Заголовки ожидаются в 3-й строке файла.
+
+    Аргументы:
+        file_prefix (str): Префикс имени файла для поиска.
+                           По умолчанию 'breakpoint_data'.
+
+    Возвращается:
+        Optional[pd.DataFrame]: DataFrame с данными из файла или None,
+                                если файлы не найдены или произошла ошибка загрузки.
+
+    Примечание:
+        При ошибке загрузки выводится сообщение и возвращается None,
+        что сигнализирует о необходимости создания нового файла.
     """
     latest_file = find_latest_breakpoint_file(file_prefix)
 
@@ -105,30 +164,41 @@ def save_excel_with_formatting(
     """
     Сохраняет DataFrame в Excel с форматированием (цвета, ширина колонок) с помощью xlsxwriter
 
+    Функция применяет сложное форматирование к выходному Excel файлу:
+        - Объединение ячеек для заголовков "ДЛЯ КЛАДОВЩИКОВ"
+        - Цветовая схема для различных групп колонок (HEX 0F243E, FDE9D9, белый)
+        - Настройка ширины колонок согласно спецификации
+        - Перенос текста для колонок с длинным содержимым
+
     Требования к форматированию:
-    - Шрифт: Arial, размер 10, чёрный (для всех ячеек)
-    - 1-я строка: объединение колонок E-P с текстом "ДЛЯ КЛАДОВЩИКОВ", выравнивание по центру
-    - 1-я строка: объединение колонок AC-AD с текстом "ДЛЯ КЛАДОВЩИКОВ", выравнивание по центру
-    - 2-я и 3-я строка (заголовки), колонки с A по AM: шрифт белый, полужирный, Arial 10, заливка HEX 0F243E
-    - Колонки с E по P: заливка HEX FDE9D9
-    - Колонки AC и AD: заливка HEX FDE9D9
-    - Остальные колонки: белая заливка
-    - Колонки AI-AJ, AM: обязательный перенос по словам
+        - Шрифт: Arial, размер 10, чёрный (для всех ячеек)
+        - 1-я строка: объединение колонок E-P с текстом "ДЛЯ КЛАДОВЩИКОВ", выравнивание по центру
+        - 1-я строка: объединение колонок AC-AD с текстом "ДЛЯ КЛАДОВЩИКОВ", выравнивание по центру
+        - 2-я и 3-я строка (заголовки), колонки с A по AM: шрифт белый, полужирный, Arial 10, заливка HEX 0F243E
+        - Колонки с E по P: заливка HEX FDE9D9
+        - Колонки AC и AD: заливка HEX FDE9D9
+        - Остальные колонки: белая заливка
+        - Колонки AI-AJ, AM: обязательный перенос по словам
 
     Ширина колонок:
-    - A-H, J-O, AF, AH, AK-AL: 25
-    - I, P, AE, AG: 80
-    - Q, S, U-AB: 30
-    - R, T, AC-AD: 50
-    - AI-AJ, AM: 100 (с переносом слов)
+        - A-H, J-O, AF, AH, AK-AL: 25
+        - I, P, AE, AG: 80
+        - Q, S, U-AB: 30
+        - R, T, AC-AD: 50
+        - AI-AJ, AM: 100 (с переносом слов)
 
-    Args:
-        df_new_data: DataFrame с новыми данными
-        output_filename: имя файла для сохранения
-        sheet_name: имя листа
+    Аргументы:
+        df_new_data (pd.DataFrame): DataFrame с данными для сохранения
+        output_filename (str): Имя выходного файла
+        sheet_name (str): Имя листа в Excel. По умолчанию 'pivot'
 
-    Returns:
-        True если сохранение успешно, False если ошибка
+    Возвращается:
+        bool: True если сохранение успешно, False при ошибке
+
+    Примечания:
+        - Требуется установленный пакет xlsxwriter
+        - При отсутствии xlsxwriter выполняется сохранение без форматирования
+        - При PermissionError или других ошибках выполняется fallback сохранение
     """
     try:
         with pd.ExcelWriter(output_filename, engine='xlsxwriter') as writer:
@@ -336,16 +406,26 @@ def save_processed_dataframe(
         file_prefix: str = 'breakpoint_data'
     ) -> Optional[str]:
     """
-    Сохраняет обработанный DataFrame с форматированием
-    Все файлы сохраняются с датой в имени.
+    Сохраняет обработанный DataFrame с объединением с существующими данными.
+
+    Функция выполняет:
+        1. Загрузку самого свежего существующего файла (если есть)
+        2. Объединение существующих и новых данных
+        3. Сохранение объединённого DataFrame в файл с датой в имени
+
+    Все файлы сохраняются с префиксом ГГГГ-ММ-ДД_ для обеспечения истории.
     При следующем запуске автоматически загружается самый свежий файл.
-    
-    Args:
-        df_new_data: новый DataFrame для сохранения
-        file_prefix: префикс имени файла
-    
-    Returns:
-        Имя сохранённого файла или None при ошибке
+
+    Аргументы:
+        df_new_data (pd.DataFrame): Новый DataFrame для сохранения.
+        file_prefix (str): Префикс имени файла. По умолчанию 'breakpoint_data'.
+
+    Возвращается:
+        Optional[str]: Имя сохранённого файла или None при ошибке сохранения.
+
+    Примечания:
+        - При несовпадении структуры колонок запрашивается подтверждение у пользователя
+        - Объединение выполняется через pd.concat с ignore_index=True
     """
     # Загружаем самый свежий существующий файл (если есть)
     df_existing = load_breakpoint_data(file_prefix)
@@ -392,7 +472,34 @@ def save_processed_dataframe(
 
 
 def main():
-    """Главная функция"""
+    """
+    Главная функция приложения Breakpoint Refactoring Tool.
+
+    Выполняет пошаговый процесс обработки технических изменений:
+
+    Этапы выполнения:
+        1. Отображение информации о программе и инструкций для пользователя
+        2. Ожидание подтверждения пользователя для начала работы
+        3. Запуск обработки BP файлов через bp_refactoring.main()
+        4. Формирование итоговой сводной таблицы через bp_summary.main()
+        5. Сохранение результата в Excel файл с форматированием
+
+    Требования к окружению:
+        - Наличие следующих файлов в рабочей папке:
+            - bp_list_2025-2026.xlsx
+            - bom.xlsx
+            - configuration.xlsx
+            - Упаковочный_лист_<партия>.xlsx
+            - BP*.xlsx (файлы технических изменений)
+
+    Returns:
+        None - при успешном выполнении программа завершается с кодом 0,
+               при ошибках - с кодом 1.
+
+    Исключения:
+        KeyboardInterrupt: обрабатывается корректно с завершением программы
+        Exception: перехватывается, выводится traceback и код возврата 1
+    """
     clear_screen()
 
     print("""
@@ -412,7 +519,7 @@ def main():
     print("      2.3. Сохранение итоговой таблицы в Excel файл 'ГГГГ-ММ-ДД_breakpoint_data.xlsx'")
     print("   3. Перед обрабаткой программа проверит имеются ли BP для скачивания из системы G-BOM")
     print("   4. Программа будет обрабатывать Excel файлы по одному")
-    print("   5. Для каждого перевода нужно будет ввести русскую версию")
+    print("   5. Четко следуйте указаниям программы на каждом шаге")
     print("   6. После каждого шага Вам предоставляется возможность проверить внесенные изменения:")
     print("      6.1. Если внесенные изменения корректны, нажмите Enter")
     print("      6.2. Если внесенные изменения некорректны, введите 'retry'")
@@ -423,25 +530,25 @@ def main():
     print("\nТРЕБОВАНИЯ:")
     print("   1. Пользователь должен иметь доступ к системе G-BOM")
     print("      • Если у Вас нет доступа к системе G-BOM, обратитесь в PLD/ED:")
-    print("        → Бариков Владимир / Barikov Vladimir")
-    print("        → Ермолаева Мая / Ermolaeva Maya")
+    print("         → Бариков Владимир / Barikov Vladimir")
+    print("         → Ермолаева Мая / Ermolaeva Maya")
     print("   2. Пользователь должен иметь доступ к системе SCM")
     print("      • Если у Вас нет доступа к системе SCM, обратитесь в PLD/WL:")
-    print("        → Федин Антон / Fedin Anton")
+    print("         → Федин Антон / Fedin Anton")
     print("   3. Пользователь должен иметь доступ к мессенджеру DingTalk")
     print("      • Информация по Breakpoint рассылается в 2 чатах DingTalk:")
-    print("        → Break Point (BP) - админ: Алексеева Елизавета / Alekseeva Elizaveta (MD/PM)")
-    print("        → Breakpoint PLD Info - админ: Бариков Владимир / Barikov Vladimir (PLD/ED)")
-    print("   3. Все Excel файлы должны находится в рабочей папке")
-    print("      • Путь к рабочей папке:")
-    print(f"       → {os.getcwd}")
-    print("      • 'ГГГГ-ММ-ДД_breakpoint_data.xlsx'")
-    print("      • 'bp_list_2025-2026.xlsx'")
-    print("      • 'bom.xlsx'")
-    print("      • 'configuration.xlsx'")
-    print("      • 'BP***.xlsx'")
+    print("         → Break Point (BP) - админ: Алексеева Елизавета / Alekseeva Elizaveta (MD/PM)")
+    print("         → Breakpoint PLD Info - админ: Бариков Владимир / Barikov Vladimir (PLD/ED)")
+    print(f"   4. Все Excel файлы должны находится в рабочей папке → {os.getcwd()}")
+    print("      • Список необходимых файлов для корректной работы программы:")
+    print("          → 'ГГГГ-ММ-ДД_breakpoint_data.xlsx'")
+    print("          → 'bp_list_2025-2026.xlsx'")
+    print("          → 'bom.xlsx'")
+    print("          → 'configuration.xlsx'")
+    print("          → 'BP<номер>.xlsx'")
+    print("          → 'Упаковочный_лист_<партия>.xlsx'")
     print("\n\n***В случае некорректной работы программы обращаться к разработчику:")
-    print("       • В мессенджере DingTalk:")
+    print("      • В мессенджере DingTalk:")
     print("         → Бариков Владимир / Barikov Vladimir (PLD/ED)")
 
     wait_for_user()

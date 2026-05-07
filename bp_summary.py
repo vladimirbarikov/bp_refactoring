@@ -3,17 +3,56 @@
 # pylint: disable=line-too-long
 # pylint: disable=too-many-lines
 """
-Модуль bp_summary последовательно преобразует
-обработанные BP DataFrame
-в итоговый df_summary_breakpoint
+Модуль bp_summary - формирование итоговой сводной таблицы
+
+Назначение модуля:
+    Обработка данных об изменениях деталей (Breakpoint) из нескольких BP файлов,
+    формирование сводной таблицы с информацией о замене деталей (Before/After),
+    расчёт количества партий на складе, загрузка данных из упаковочных листов.
+
+Основные функции:
+    1. Загрузка и обработка конфигурационного файла (configuration.xlsx)
+    2. Поиск и связывание пар деталей Before/After
+    3. Расчёт количества партий на складе (Quantity batches in SS)
+    4. Загрузка данных из упаковочных листов (коробки, паллеты)
+    5. Формирование итоговой Excel-таблицы для рассылки
+
+Требования к входным данным:
+    - BP файлы (Excel) с колонками: Part No., Part Name (RUS), Quantity,
+      Workcenter No., Workcenter Name, Supplier Name (RUS), Localization,
+      Change, Update Type, Status и др.
+    - Конфигурационный файл configuration.xlsx с листом 'common',
+      содержащим колонки 'BOM Product' и 'Quantity vehicle in batch'
+    - Упаковочные листы (Excel) с колонками:
+        - '零部件号码' или 'Part No.',
+        - '纸箱装入数量' или 'Parts Q\'ty-Box'
+        - и т.д.
+
+Выходные данные:
+    pd.DataFrame с колонками: BP_No, Status, Batch plan, Batch fact,
+    Part No. Before/After, Quantity per Vehicle Before/After,
+    Quantity per Box Before/After, Box/Pallet размеры и др.
+
+Использование:
+    >>> from bp_summary import main as summary_main
+
+Версия: 1.0
+Совместимость: Python 3.12.3+, Pandas 3.0.2+, OpenPyXL 3.1.5+
+Поддержка: PLD Engineering Center
+Дата создания: 2026-05-07
+Лицензия: MIT
+Статус: Production
 """
 
+import io
 import os
 import sys
-import io
+import warnings
 from typing import Dict, List, Optional
 
 import pandas as pd
+
+warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # Для Windows консоли
 if sys.platform == 'win32':
@@ -24,7 +63,14 @@ if sys.platform == 'win32':
 def wait_for_user(
         prompt="\nНажмите Enter для продолжения..."
     ):
-    """Ожидание нажатия Enter"""
+    """
+    Ожидает нажатия клавиши Enter от пользователя.
+
+    Обрабатывает Ctrl+C и EOF для корректного завершения программы.
+
+    Аргументы:
+        prompt (str): Текст приглашения к вводу.
+    """
     try:
         input(prompt)
     except KeyboardInterrupt:
@@ -40,7 +86,14 @@ def print_step_header(
         total_steps,
         description
     ):
-    """Вывод заголовка шага"""
+    """
+    Выводит форматированный заголовок шага обработки.
+
+    Аргументы:
+        step_num (int): Номер текущего шага.
+        total_steps (int): Общее количество шагов.
+        description (str): Описание шага.
+    """
     print("\n" + "=" * 60)
     print(f"ШАГ {step_num}/{total_steps}: {description}")
     print("=" * 60)
@@ -50,8 +103,13 @@ def save_state_before_step(
         df
     ):
     """
-    Сохраняет состояние DataFrame перед выполнением шага
-    Возвращает сохранённую копию DataFrame
+    Сохраняет состояние DataFrame перед выполнением шага для возможности отката.
+
+    Аргументы:
+        df (pd.DataFrame): DataFrame для сохранения.
+
+    Возвращается:
+        pd.DataFrame: Глубокая копия DataFrame или None, если df=None.
     """
     if df is not None:
         print("  [Сохранено состояние перед шагом]")
@@ -64,8 +122,14 @@ def restore_state(
         step_name
     ):
     """
-    Восстанавливает сохранённое состояние DataFrame
-    Возвращает восстановленный DataFrame
+    Восстанавливает сохранённое состояние DataFrame.
+
+    Аргументы:
+        saved_df (pd.DataFrame): Сохранённый DataFrame.
+        step_name (str): Имя шага для вывода сообщения.
+
+    Возвращается:
+        pd.DataFrame: Восстановленный DataFrame или None при ошибке.
     """
     if saved_df is not None:
         print(f"  [Восстанавливаем состояние перед шагом: {step_name}]")
@@ -80,8 +144,22 @@ def confirm_step(
         saved_state
     ):
     """
-    Запрашивает у пользователя подтверждение после выполнения шага
-    Возвращает (continue_flag, df, new_saved_state)
+    Запрашивает у пользователя подтверждение после выполнения шага.
+
+    Поддерживает:
+        - Enter: подтверждение, сохранение нового состояния
+        - 'retry': отмена изменений и повтор шага
+
+    Аргументы:
+        step_name (str): Имя шага для вывода сообщений.
+        df_current (pd.DataFrame): Текущий DataFrame после выполнения шага.
+        saved_state (pd.DataFrame): Сохранённое состояние перед шагом.
+
+    Возвращается:
+        tuple: (continue_flag, df, new_saved_state)
+            - continue_flag (bool): True если нужно продолжить, False если retry
+            - df (pd.DataFrame): Текущий или восстановленный DataFrame
+            - new_saved_state (pd.DataFrame): Новое сохранённое состояние
     """
     print(f"\n  Шаг '{step_name}' выполнен.")
     try:
@@ -113,7 +191,14 @@ def safe_float_convert(
         default=0.0
     ) -> float:
     """
-    Безопасное преобразование значения в float
+    Безопасно преобразует значение в float, обрабатывая пустые значения.
+
+    Аргументы:
+        value: Значение для преобразования.
+        default (float): Значение по умолчанию. По умолчанию 0.0.
+
+    Возвращается:
+        float: Преобразованное значение или значение по умолчанию.
     """
     if value is None or value == '' or value == '-':
         return default
@@ -128,7 +213,14 @@ def safe_str_convert(
         default=''
     ) -> str:
     """
-    Безопасное преобразование значения в строку
+    Безопасно преобразует значение в строку, обрабатывая None и ошибки.
+
+    Аргументы:
+        value: Значение для преобразования.
+        default (str): Значение по умолчанию. По умолчанию ''.
+
+    Возвращается:
+        str: Преобразованная строка или значение по умолчанию.
     """
     if value is None:
         return default
@@ -141,7 +233,26 @@ def safe_str_convert(
 def load_configuration_file(
         config_filename: str = 'configuration.xlsx'
     ) -> Optional[pd.DataFrame]:
-    """Загрузка конфигурационного файла (лист 'common')"""
+    """
+    Загружает конфигурационный файл (лист 'common').
+
+    Конфигурационный файл должен содержать:
+        - BOM Product: идентификатор продукта
+        - Quantity vehicle in batch: количество автомобилей в партии
+        - Batch code: код партии (опционально)
+        - Configuration: конфигурация для утилизации (опционально)
+        - Transmission: тип трансмиссии (опционально)
+
+    Аргументы:
+        config_filename (str): Имя конфигурационного файла. По умолчанию 'configuration.xlsx'.
+
+    Возвращается:
+        Optional[pd.DataFrame]: DataFrame с данными конфигурации или None при ошибке.
+
+    Примечания:
+        - Файл должен содержать лист с именем 'common'
+        - При отсутствии файла выводится предупреждение, но обработка продолжается
+    """
     if not os.path.exists(config_filename):
         print(f"Предупреждение: Файл конфигурации '{config_filename}' не найден")
         print("Некоторые поля будут пустыми")
@@ -186,8 +297,20 @@ def show_dataframe_preview(
         max_colwidth=40
     ):
     """
-    Отображает первые строки DataFrame для визуального контроля
-    Числовые поля отображаются как числа, 0.0 заменяется на '-' для удобства чтения
+    Отображает первые строки DataFrame для визуального контроля.
+
+    Особенности:
+        - Числовые поля отображаются как числа, 0.0 заменяется на '-'
+        - Длинные строки обрезаются до max_colwidth
+        - Автоматическая настройка ширины вывода
+
+    Аргументы:
+        df (pd.DataFrame): DataFrame для отображения.
+        step_name (str): Имя шага для вывода в заголовке.
+        max_rows (int): Максимальное количество строк для отображения. По умолчанию 5.
+        focus_columns (list, optional): Список колонок для отображения.
+                                        Если None, показываются первые 5 колонок.
+        max_colwidth (int): Максимальная ширина содержимого колонки в символах.
     """
     if df is None or df.empty:
         print(f"\n[Preview после шага: {step_name}]")
@@ -244,23 +367,20 @@ def classify_row_before_after(
         row: pd.Series
     ) -> str:
     """
-    Классификация детали на 'Before', 'After' или 'Unknown'
+    Классифицирует деталь на 'Before', 'After' или 'Unknown'.
 
-    Приоритет 1: колонка 'Change'
-        - 'Before Change' → Before
-        - 'After Change' → After
+    Алгоритм:
+        - Приоритет 1: колонка 'Change'
+            - 'Before Change' → Before
+            - 'After Change' → After
+        - Приоритет 2: если Change пустой → Unknown
+            (Delete, Add, Replace, Update будут обработаны в find_pairs)
 
-    Приоритет 2: если Change пустой, то:
-        - Строки с 'Delete' → 'Unknown' (для обработки в паре с Add)
-        - Строки с 'Add' → 'Unknown' (для обработки в паре с Delete/Replace/Update)
-        - Строки с 'Replace' → 'Unknown' (для обработки в паре с Add)
-        - Строки с 'Update' → 'Unknown' (для обработки в паре с Add)
+    Аргументы:
+        row (pd.Series): Строка DataFrame для классификации.
 
-    ВСЕ строки без явного Change попадают в Unknown, чтобы связывание 
-    происходило только внутри find_pairs по правилам:
-    - Add + Delete → Add = After, Delete = Before
-    - Add + Replace → Add = Before, Replace = After
-    - Add + Update → Add = Before, Update = After
+    Возвращается:
+        str: 'Before', 'After' или 'Unknown'.
     """
     change_val = safe_str_convert(row.get('Change', ''))
 
@@ -279,7 +399,24 @@ def create_pair_dict(
         before_row: Optional[pd.Series],
         after_row: Optional[pd.Series]
     ) -> Dict:
-    """Создает словарь для одной строки итоговой таблицы из пары Before/After"""
+    """
+    Создаёт словарь с данными для пары деталей Before/After.
+
+    Функция объединяет информацию из строк Before и After деталей,
+    заполняя общие поля из любой непустой строки, а специфичные поля
+    из соответствующих строк.
+
+    Аргументы:
+        before_row (Optional[pd.Series]): Строка с деталью Before или None.
+        after_row (Optional[pd.Series]): Строка с деталью After или None.
+
+    Возвращается:
+        Dict: Словарь с данными для итоговой таблицы, содержащий:
+            - Общие поля: BP_No, Batch plan, BOM Product, Status и др.
+            - Поля Before: Part No. Before, Quantity per Vehicle Before и др.
+            - Поля After: Part No. After, Quantity per Vehicle After и др.
+            - Поля для заполнения позже: Batch fact, Change Date, Comments и др.
+    """
     result = {}
 
     source_row = before_row if before_row is not None else after_row
@@ -374,13 +511,24 @@ def find_pairs(
         df_bp: pd.DataFrame
     ) -> List[Dict]:
     """
-    Поиск пар Before/After деталей
+    Находит и связывает пары деталей Before/After из исходного BP файла.
 
-    Алгоритм:
-    1. Классифицируем строки через classify_row_before_after()
-    2. Разделяем на группы: Before, After, Unknown
-    3. Before и After связываем в пары по Part No. или Part Name (RUS)
-    4. Unknown обрабатываем по правилам Add+Delete, Add+Replace, Add+Update
+    Алгоритм работы:
+        1. Классифицирует строки по колонке 'Change' (Before Change/After Change)
+           и по колонке 'Update Type' (Delete, Add, Replace, Update)
+        2. Связывает явные Before/After по Part No. или Part Name
+        3. Обрабатывает комбинации Add + Delete (Add=After, Delete=Before)
+        4. Обрабатывает комбинации Add + Replace/Update (Add=Before, Replace/Update=After)
+        5. Оставшиеся непарные строки добавляются как одиночные
+
+    Аргументы:
+        df_bp (pd.DataFrame): Исходный DataFrame с данными BP файла.
+            Должен содержать колонки: 'Change', 'Update Type', 'Part No.',
+            'Part Name (RUS)' и другие.
+
+    Возвращается:
+        List[Dict]: Список словарей, каждый словарь представляет одну пару
+            или одиночную деталь с заполненными полями Before/After.
     """
     df_bp = df_bp.copy()
 
@@ -557,8 +705,20 @@ def user_input_for_single_bp(
         bp_number: str
     ) -> pd.DataFrame:
     """
-    Интерактивный ввод Batch fact и Change Date для одного BP файла
-    Данные вводятся один раз для всего BP, а не для каждой строки
+    Запрашивает у пользователя ввод данных для всего технического изменения (BP).
+
+    Функция запрашивает:
+        - Batch fact: номер партии для After деталей
+        - Change Date: дата внесения изменения
+
+    Введённые значения применяются ко всем строкам DataFrame.
+
+    Аргументы:
+        df_current (pd.DataFrame): Текущий DataFrame с данными BP.
+        bp_number (str): Номер BP для вывода в сообщениях.
+
+    Возвращается:
+        pd.DataFrame: DataFrame с заполненными полями 'Batch fact' и 'Change Date'.
     """
     print(f"\n--- Ввод данных для BP {bp_number} ---")
     print(f"Всего строк для обработки: {len(df_current)}")
@@ -596,13 +756,24 @@ def config_lookup_for_single_bp(
         df_config: Optional[pd.DataFrame]
     ) -> pd.DataFrame:
     """
-    Поиск значений в конфигурационном файле для одного BP файла
-    
-    Алгоритм:
-    1. Обрабатываются ТОЛЬКО детали Before (у которых есть Part No. Before)
-    2. Ищет Quantity vehicle in batch в конфигурации по BOM Product
-    3. Вычисляет Quantity batches in SS = round(Quantity in SS / Quantity vehicle in batch, 2)
-    4. Выводит пользователю Part No. Before
+    Выполняет поиск данных в конфигурационном файле для каждого BP.
+
+    Функция:
+        1. Находит Quantity vehicle in batch по BOM Product
+        2. Рассчитывает Quantity batches in SS = Quantity in SS / Quantity vehicle in batch
+        3. Ищет Configuration, Batch code, Transmission по Batch fact
+
+    Аргументы:
+        df_current (pd.DataFrame): Текущий DataFrame с данными BP.
+        df_config (Optional[pd.DataFrame]): DataFrame с конфигурацией из файла
+            configuration.xlsx (лист 'common').
+
+    Возвращается:
+        pd.DataFrame: DataFrame с заполненными полями:
+            - Quantity batches in SS
+            - Configuration for old parts using out
+            - Batches for old parts using out
+            - Transmission
     """
     if df_config is None or df_config.empty:
         print("  Конфигурационный файл не загружен. Пропускаем поиск.")
@@ -690,8 +861,24 @@ def batch_file_loader_for_single_bp(
         df_current: pd.DataFrame
     ) -> pd.DataFrame:
     """
-    Загрузка данных из упаковочного листа для одного BP файла
-    Пользователь вручную указывает файлы упаковочных листов для каждой детали
+    Загружает упаковочные листы и извлекает данные упаковки для деталей.
+
+    Функция:
+        1. Запрашивает у пользователя имя файла упаковочного листа для Before деталей
+        2. Загружает файл и извлекает:
+            - Quantity per Box (количество деталей в коробке)
+            - Box Size (размер коробки)
+            - Pallet Size (размер паллеты)
+        3. Повторяет процедуру для After деталей (только если указан Batch fact)
+
+    Аргументы:
+        df_current (pd.DataFrame): Текущий DataFrame с данными BP.
+
+    Возвращается:
+        pd.DataFrame: DataFrame с заполненными полями упаковки:
+            - Quantity per Box Before / After
+            - Box Before / After (L-W-H) mm
+            - Pallet Before / After (L-W-H) mm
     """
     print("\n" + "=" * 60)
     print("ЗАГРУЗКА УПАКОВОЧНОГО ЛИСТА")
@@ -808,18 +995,26 @@ def extract_packaging_data(
         part_no: str
     ) -> Optional[Dict]:
     """
-    Извлекает данные упаковки для указанной детали из DataFrame упаковочного листа
+    Извлекает данные упаковки для указанной детали из загруженного упаковочного листа.
 
-    Args:
-        df_batch: DataFrame с данными упаковочного листа
-        part_no: номер детали для поиска
+    Функция:
+        1. Определяет строку с заголовками колонок (поиск '零部件号码' или 'Part No.')
+        2. Устанавливает правильные имена колонок
+        3. Ищет строку с указанным Part No.
+        4. Извлекает значения:
+            - Количество деталей в коробке ('纸箱装入数量' / 'Parts Q\'ty-Box')
+            - Размер коробки ('纸箱尺寸' / 'Box Size')
+            - Размер паллеты ('包装单元尺寸' / 'Pallet Size')
 
-    Returns:
-        Словарь с данными:
-        - parts_qty_box: количество деталей в коробке
-        - box_size: размер коробки (строка)
-        - pallet_size: размер паллеты (строка)
-        или None, если деталь не найдена
+    Аргументы:
+        df_batch (pd.DataFrame): DataFrame с данными упаковочного листа.
+        part_no (str): Номер детали для поиска.
+
+    Возвращается:
+        Optional[Dict]: Словарь с ключами или None, если деталь не найдена:
+            - 'parts_qty_box' (float): Количество деталей в коробке
+            - 'box_size' (str): Размер коробки в формате "Д×Ш×В мм"
+            - 'pallet_size' (str): Размер паллеты в формате "Д×Ш×В мм"
     """
     if df_batch is None or df_batch.empty:
         return None
@@ -965,14 +1160,20 @@ def load_batch_file_by_name(
         search_path: str
     ) -> Optional[pd.DataFrame]:
     """
-    Загрузка Excel файла партии по указанному имени файла
+    Загружает упаковочный лист по имени файла из указанной директории.
 
-    Args:
-        filename: имя файла (например, '2029 RKV.xlsx')
-        search_path: путь к папке с файлами партий
+    Функция:
+        1. Проверяет наличие расширения (.xlsx/.xls), добавляет .xlsx по умолчанию
+        2. Формирует полный путь к файлу
+        3. Загружает первый лист Excel файла
 
-    Returns:
-        DataFrame с данными партии или None
+    Аргументы:
+        filename (str): Имя файла (с расширением или без).
+        search_path (str): Путь к директории для поиска файла.
+
+    Возвращается:
+        Optional[pd.DataFrame]: DataFrame с данными упаковочного листа
+                                или None при ошибке (файл не найден, нет прав, повреждён).
     """
     if not filename or filename == '':
         print("  Ошибка: Имя файла не указано")
@@ -1023,11 +1224,25 @@ def process_single_bp(
         interactive: bool = True
     ) -> pd.DataFrame:
     """
-    Обработка одного BP файла с подтверждением каждого шага:
-    1. Поиск пар Before/After
-    2. Пользовательский ввод
-    3. Поиск в конфигурации
-    4. Загрузка файлов партий
+    Выполняет полную обработку одного BP файла.
+
+    Последовательность шагов:
+        1. Предварительный просмотр строк с явным указанием Change
+        2. Поиск и связывание пар Before/After
+        3. Ввод данных Batch fact и Change Date (интерактивно)
+        4. Поиск данных в конфигурационном файле и расчёт партий
+        5. Загрузка данных из упаковочных листов
+
+    Аргументы:
+        bp_number (str): Номер BP для вывода в сообщениях.
+        df_bp (pd.DataFrame): Исходный DataFrame с данными BP файла.
+        df_config (Optional[pd.DataFrame]): DataFrame с конфигурацией.
+        interactive (bool): Флаг интерактивного режима. По умолчанию True.
+                            Если False, пропускает шаг ввода данных.
+
+    Возвращается:
+        pd.DataFrame: Обработанный DataFrame для данного BP или пустой DataFrame
+                      при отсутствии данных.
     """
     print(f"\n{'=' * 60}")
     print(f"ОБРАБОТКА BP: {bp_number}")
@@ -1155,8 +1370,23 @@ def main(
         interactive: bool = True
     ) -> pd.DataFrame:
     """
-    Главная функция модуля summary_breakpoint_table
-    Последовательная обработка каждого BP файла
+    Главная функция формирования итоговой сводной таблицы.
+
+    Функция последовательно обрабатывает все переданные BP файлы,
+    объединяет результаты и формирует итоговый DataFrame с упорядоченными колонками.
+
+    Аргументы:
+        processed_results (Dict[str, pd.DataFrame]): Словарь, где ключ - номер BP,
+            значение - DataFrame с исходными данными BP файла.
+        interactive (bool): Флаг интерактивного режима. По умолчанию True.
+            Если False, пропускает шаг ввода данных Batch fact и Change Date.
+
+    Возвращается:
+        pd.DataFrame: Итоговая сводная таблица со всеми обработанными данными,
+            содержащая колонки в заданном порядке.
+
+    Пример использования:
+        >>> from bp_summary import main as summary_main
     """
     print("""
         ╔══════════════════════════════════════════════════════════════╗
@@ -1244,8 +1474,3 @@ def main(
     print(f"Колонок: {len(df_summary.columns)}")
 
     return df_summary
-
-
-if __name__ == "__main__":
-    print("Этот модуль предназначен для импорта из bp_main")
-    print("Использование: from bp_summary import main")
