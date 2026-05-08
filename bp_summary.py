@@ -175,12 +175,25 @@ def confirm_step(
             - new_saved_state (pd.DataFrame): Новое сохранённое состояние
     """
     print(f"\n  Шаг '{step_name}' выполнен.")
+
     while True:
         try:
             user_input = input(
                 "\nПроверьте результат. Если всё корректно, нажмите Enter. Если нужно повторить шаг, введите 'retry': "
             ).strip().lower()
-            break
+
+            if user_input == 'retry':
+                print(f"Повторяем шаг '{step_name}'...\n")
+                restored_df = restore_state(saved_state, step_name)
+                if restored_df is not None:
+                    return False, restored_df, saved_state
+                else:
+                    return False, df_current, saved_state
+            else:
+                print("Продолжаем...\n")
+                new_saved_state = save_state_before_step(df_current)
+                return True, df_current, new_saved_state
+
         except KeyboardInterrupt:
             print()
             while True:
@@ -190,9 +203,12 @@ def confirm_step(
                     sys.exit(0)
                 elif confirm == 'нет':
                     print("\nПродолжаем работу...")
-                    break  # Продолжаем ввод
+                    break  # Выходим из внутреннего цикла и продолжаем внешний
                 else:
                     print("Пожалуйста, введите 'да' или 'нет'")
+            # После break из внутреннего цикла, продолжаем внешний цикл (повторный ввод)
+            continue
+
         except EOFError:
             print("\n\nОбнаружен конец ввода. Программа завершена.")
             sys.exit(0)
@@ -1006,7 +1022,7 @@ def batch_file_loader_for_single_bp(
                                     print("\n\nПрограмма прервана пользователем (Ctrl+C)")
                                     sys.exit(0)
                             continue
-                    
+
                     if retry == 'no':
                         print("    → Пропущено.")
                         break
@@ -1099,7 +1115,7 @@ def batch_file_loader_for_single_bp(
                                         print("\n\nПрограмма прервана пользователем (Ctrl+C)")
                                         sys.exit(0)
                                 continue
-    
+
                         if retry == 'no':
                             print("    → Пропущено.")
                             break
