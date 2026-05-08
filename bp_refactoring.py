@@ -1353,107 +1353,121 @@ def process_bp_file(bp_filename, df_bom):
     saved_state = None  # Инициализируем сохранённое состояние
 
     # Шаг 1: Загрузка BP файла
-    print_step_header(1, 18, "Загрузка BP файла")
-    df_bp = load_excel_file(bp_filename, "BP файл")
-    if df_bp is None:
-        return None
-    show_dataframe_preview(df_bp, "Загрузка исходного BP файла")
+    while True:
+        print_step_header(1, 18, "Загрузка BP файла")
+        df_bp = load_excel_file(bp_filename, "BP файл")
+        if df_bp is None:
+            return None
+        show_dataframe_preview(df_bp, "Загрузка исходного BP файла")
 
-    # Сохраняем состояние после Шага 1
-    saved_state = save_state_before_step(df_bp)
+        # Сохраняем состояние после Шага 1
+        saved_state = save_state_before_step(df_bp)
 
-    continue_flag, df_bp, saved_state = confirm_step("Загрузка BP файла", df_bp, saved_state)
-    if not continue_flag:
-        return process_bp_file(bp_filename, df_bom)
+        continue_flag, df_bp, saved_state = confirm_step("Загрузка BP файла", df_bp, saved_state)
+        if continue_flag:
+            break
+        # retry - повторяем шаг 1
 
     # Шаг 2: Выбор нужных колонок
-    print_step_header(2, 18, "Выбор нужных колонок")
-    bp_columns_to_keep = [
-        'Change', 'BOM Product', 'Update Type', 'Part No.', 'Part Name(CHN)',
-        'Quantity', 'Supplier Name', 'Change Description', 'Solution',
-        'Color Code', 'Color Name', 'Production Part Disposal',
-        'Interchangeable', 'In Stock', 'New Part Available Date',
-        'Workcenter No.', 'Workcenter Name',
-    ]
+    while True:
+        print_step_header(2, 18, "Выбор нужных колонок")
+        bp_columns_to_keep = [
+            'Change', 'BOM Product', 'Update Type', 'Part No.', 'Part Name(CHN)',
+            'Quantity', 'Supplier Name', 'Change Description', 'Solution',
+            'Color Code', 'Color Name', 'Production Part Disposal',
+            'Interchangeable', 'In Stock', 'New Part Available Date',
+            'Workcenter No.', 'Workcenter Name',
+        ]
 
-    available_cols = [col for col in bp_columns_to_keep if col in df_bp.columns]
-    missing_cols = set(bp_columns_to_keep) - set(available_cols)
-    if missing_cols:
-        print(f"Внимание: Отсутствуют колонки: {missing_cols}")
+        available_cols = [col for col in bp_columns_to_keep if col in df_bp.columns]
+        missing_cols = set(bp_columns_to_keep) - set(available_cols)
+        if missing_cols:
+            print(f"Внимание: Отсутствуют колонки: {missing_cols}")
 
-    if not available_cols:
-        print("Ошибка: В файле нет ни одной необходимой колонки")
-        return None
+        if not available_cols:
+            print("Ошибка: В файле нет ни одной необходимой колонки")
+            return None
 
-    df_bp_new = df_bp[available_cols].copy()
-    df_bp_new['BP_No'] = bp_number
+        df_bp_new = df_bp[available_cols].copy()
+        df_bp_new['BP_No'] = bp_number
 
-    show_dataframe_preview(
-        df_bp_new, "Выбор нужных колонок",
-        focus_columns=['BP_No', 'Change', 'BOM Product', 'Update Type', 'Part No.', 'Part Name(CHN)']
-    )
+        show_dataframe_preview(
+            df_bp_new, "Выбор нужных колонок",
+            focus_columns=['BP_No', 'Change', 'BOM Product', 'Update Type', 'Part No.', 'Part Name(CHN)']
+        )
+
+        continue_flag, df_bp_new, saved_state = confirm_step("Выбор нужных колонок", df_bp_new, saved_state)
+        if continue_flag:
+            break
+        # retry - повторяем шаг 2
 
     # Шаг 3: Выбор статуса тех. изменения
-    # Запрашиваем статус для BP файла (только один раз для каждого файла)
-    # Проверяем, не задан ли уже статус (например, при retry)
-    print_step_header(3, 18, "Выбор статуса тех. изменения")
-    if 'Status' not in df_bp_new.columns or df_bp_new['Status'].iloc[0] == '-':
-        status = get_bp_status(bp_number)
-        df_bp_new['Status'] = status
-    else:
-        print(f"  Статус для BP {bp_number} уже задан: {df_bp_new['Status'].iloc[0]}")
-    show_dataframe_preview(
-        df_bp_new, "Выбор статуса тех. изменения",
-        focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Update Type', 'Part No.', 'Part Name(CHN)']
-    )
+    while True:
+        print_step_header(3, 18, "Выбор статуса тех. изменения")
+        if 'Status' not in df_bp_new.columns or df_bp_new['Status'].iloc[0] == '-':
+            status = get_bp_status(bp_number)
+            df_bp_new['Status'] = status
+        else:
+            print(f"  Статус для BP {bp_number} уже задан: {df_bp_new['Status'].iloc[0]}")
+        show_dataframe_preview(
+            df_bp_new, "Выбор статуса тех. изменения",
+            focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Update Type', 'Part No.', 'Part Name(CHN)']
+        )
 
-    continue_flag, df_bp_new, saved_state = confirm_step("Выбор нужных колонок", df_bp_new, saved_state)
-    if not continue_flag:
-        return process_bp_file(bp_filename, df_bom)
+        continue_flag, df_bp_new, saved_state = confirm_step("Выбор статуса тех. изменения", df_bp_new, saved_state)
+        if continue_flag:
+            break
+        # retry - повторяем шаг 3
 
     # Шаг 4: Заполнение пустых значений
-    print_step_header(4, 18, "Заполнение пустых значений")
-    columns_with_replacements = fill_empty_values_with_dash(df_bp_new, available_cols)
+    while True:
+        print_step_header(4, 18, "Заполнение пустых значений")
+        columns_with_replacements = fill_empty_values_with_dash(df_bp_new, available_cols)
 
-    base_columns = ['BOM Product', 'Part No.', 'Part Name(CHN)']
-    preview_columns = []
-    for col in base_columns:
-        if col in df_bp_new.columns and col not in preview_columns:
-            preview_columns.append(col)
-    for col in columns_with_replacements:
-        if col in df_bp_new.columns and col not in preview_columns:
-            preview_columns.append(col)
+        base_columns = ['BOM Product', 'Part No.', 'Part Name(CHN)']
+        preview_columns = []
+        for col in base_columns:
+            if col in df_bp_new.columns and col not in preview_columns:
+                preview_columns.append(col)
+        for col in columns_with_replacements:
+            if col in df_bp_new.columns and col not in preview_columns:
+                preview_columns.append(col)
 
-    if preview_columns:
-        show_dataframe_preview(
-            df_bp_new, "Заполнение пустых значений",
-            focus_columns=preview_columns
+        if preview_columns:
+            show_dataframe_preview(
+                df_bp_new, "Заполнение пустых значений",
+                focus_columns=preview_columns
+            )
+        else:
+            show_dataframe_preview(
+                df_bp_new, "Заполнение пустых значений",
+                focus_columns=['BP_No', 'Status', 'Change','BOM Product', 'Part No.', 'Part Name(CHN)']
+            )
+
+        continue_flag, df_bp_new, saved_state = confirm_step(
+            "Заполнение пустых значений", df_bp_new, saved_state
         )
-    else:
-        show_dataframe_preview(
-            df_bp_new, "Заполнение пустых значений",
-            focus_columns=['BP_No', 'Status', 'Change','BOM Product', 'Part No.', 'Part Name(CHN)']
-        )
-
-    continue_flag, df_bp_new, saved_state = confirm_step(
-        "Заполнение пустых значений", df_bp_new, saved_state
-    )
-    if not continue_flag:
-        return process_bp_file(bp_filename, df_bom)
+        if continue_flag:
+            break
+        # retry - повторяем шаг 4
 
     # Шаг 5: Ввод количества деталей в SS
-    print_step_header(5, 18, "Ввод количества деталей в SS")
-    quantity_dict = get_quantity_in_ss(df_bp_new, bp_number)
-    df_bp_new['Quantity in SS'] = df_bp_new['Part No.'].map(quantity_dict).fillna(0).astype(int)
+    while True:
+        print_step_header(5, 18, "Ввод количества деталей в SS")
+        quantity_dict = get_quantity_in_ss(df_bp_new, bp_number)
+        df_bp_new['Quantity in SS'] = df_bp_new['Part No.'].map(quantity_dict).fillna(0).astype(int)
 
-    show_dataframe_preview(
-        df_bp_new, "Ввод Quantity in SS",
-        focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Part No.', 'Part Name (CHN)', 'Quantity in SS']
-    )
+        show_dataframe_preview(
+            df_bp_new, "Ввод количества деталей в SS",
+            focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Part No.', 'Part Name (CHN)', 'Quantity in SS']
+        )
 
-    continue_flag, df_bp_new, saved_state = confirm_step("Ввод Quantity in SS", df_bp_new, saved_state)
-    if not continue_flag:
-        return process_bp_file(bp_filename, df_bom)
+        continue_flag, df_bp_new, saved_state = confirm_step(
+            "Ввод количества деталей в SS", df_bp_new, saved_state
+        )
+        if continue_flag:
+            break
+        # retry - повторяем шаг 5
 
     # Шаг 6: Перевод названий деталей
     while True:
@@ -1479,7 +1493,7 @@ def process_bp_file(bp_filename, df_bom):
         )
         if continue_flag:
             break
-        # при retry продолжаем цикл с восстановленным состоянием
+        # retry - повторяем шаг 6
 
     # Шаг 7: Поиск официальных названий поставщиков
     while True:
@@ -1503,6 +1517,7 @@ def process_bp_file(bp_filename, df_bom):
         continue_flag, df_bp_new, saved_state = confirm_step("Поиск официальных названий поставщиков", df_bp_new, saved_state)
         if continue_flag:
             break
+        # retry - повторяем шаг 7
 
     # Шаг 8: Ввод статуса локализации поставщиков
     while True:
@@ -1518,23 +1533,26 @@ def process_bp_file(bp_filename, df_bom):
         )
         if continue_flag:
             break
+        # retry - повторяем шаг 8
 
     # Шаг 9: Фильтрация китайских символов
-    print_step_header(9, 18, "Фильтрация китайских символов")
-    if 'Change Description' in df_bp_new.columns:
-        df_bp_new['Change Description'] = df_bp_new['Change Description'].apply(filter_chinese_lines)
-        print("  Колонка 'Change Description': фильтрация выполнена")
-    if 'Solution' in df_bp_new.columns:
-        df_bp_new['Solution'] = df_bp_new['Solution'].apply(filter_chinese_lines)
-        print("  Колонка 'Solution': фильтрация выполнена")
-    show_dataframe_preview(
-        df_bp_new, "Фильтрация китайских символов",
-        focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Change Description', 'Solution']
-    )
+    while True:
+        print_step_header(9, 18, "Фильтрация китайских символов")
+        if 'Change Description' in df_bp_new.columns:
+            df_bp_new['Change Description'] = df_bp_new['Change Description'].apply(filter_chinese_lines)
+            print("  Колонка 'Change Description': фильтрация выполнена")
+        if 'Solution' in df_bp_new.columns:
+            df_bp_new['Solution'] = df_bp_new['Solution'].apply(filter_chinese_lines)
+            print("  Колонка 'Solution': фильтрация выполнена")
+        show_dataframe_preview(
+            df_bp_new, "Фильтрация китайских символов",
+            focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Change Description', 'Solution']
+        )
 
-    continue_flag, df_bp_new, saved_state = confirm_step("Фильтрация китайских символов", df_bp_new, saved_state)
-    if not continue_flag:
-        return process_bp_file(bp_filename, df_bom)
+        continue_flag, df_bp_new, saved_state = confirm_step("Фильтрация китайских символов", df_bp_new, saved_state)
+        if continue_flag:
+            break
+        # retry - повторяем шаг 9
 
     # Шаг 10: Перевод описания
     while True:
@@ -1558,6 +1576,7 @@ def process_bp_file(bp_filename, df_bom):
         continue_flag, df_bp_new, saved_state = confirm_step("Перевод описания изменений", df_bp_new, saved_state)
         if continue_flag:
             break
+        # retry - повторяем шаг 10
 
     # Шаг 11: Перевод решения
     while True:
@@ -1581,6 +1600,7 @@ def process_bp_file(bp_filename, df_bom):
         continue_flag, df_bp_new, saved_state = confirm_step("Перевод решения", df_bp_new, saved_state)
         if continue_flag:
             break
+        # retry - повторяем шаг 11
 
     # Шаг 12: Обработка цветов и Color Code
     while True:
@@ -1622,6 +1642,7 @@ def process_bp_file(bp_filename, df_bom):
         continue_flag, df_bp_new, saved_state = confirm_step("Обработка цветов и Color Code", df_bp_new, saved_state)
         if continue_flag:
             break
+        # retry - повторяем шаг 12
 
     # Шаг 13: Обработка рабочих центров
     while True:
@@ -1644,6 +1665,7 @@ def process_bp_file(bp_filename, df_bom):
         continue_flag, df_bp_new, saved_state = confirm_step("Обработка рабочих центров", df_bp_new, saved_state)
         if continue_flag:
             break
+        # retry - повторяем шаг 13
 
     # Шаг 14: Перевод требований по дальнешейму использованию или утилизации старых деталей
     while True:
@@ -1659,6 +1681,7 @@ def process_bp_file(bp_filename, df_bom):
         )
         if continue_flag:
             break
+        # retry - повторяем шаг 14
 
     # Шаг 15: Перевод требований по взаимозаменяемости
     while True:
@@ -1674,63 +1697,68 @@ def process_bp_file(bp_filename, df_bom):
         )
         if continue_flag:
             break
+        # retry - повторяем шаг 15
 
     # Шаг 16: Проверка наличия в BOM
-    print_step_header(16, 18, "Проверка наличия деталей в BOM")
-    if df_bom is not None and 'BOM Product' in df_bp_new.columns and 'Part No.' in df_bp_new.columns:
-        try:
-            df_bp_new['Composite Key'] = df_bp_new['BOM Product'].astype(str) + '|' + df_bp_new['Part No.'].astype(str)
-            df_bom['Composite Key'] = df_bom['Model'].astype(str) + '|' + df_bom['Part number'].astype(str)
-            df_bp_new['Is in BOM'] = df_bp_new['Composite Key'].isin(df_bom['Composite Key'])
-            df_bp_new = df_bp_new.drop(['Composite Key'], axis=1)
+    while True:
+        print_step_header(16, 18, "Проверка наличия деталей в BOM")
+        if df_bom is not None and 'BOM Product' in df_bp_new.columns and 'Part No.' in df_bp_new.columns:
+            try:
+                df_bp_new['Composite Key'] = df_bp_new['BOM Product'].astype(str) + '|' + df_bp_new['Part No.'].astype(str)
+                df_bom['Composite Key'] = df_bom['Model'].astype(str) + '|' + df_bom['Part number'].astype(str)
+                df_bp_new['Is in BOM'] = df_bp_new['Composite Key'].isin(df_bom['Composite Key'])
+                df_bp_new = df_bp_new.drop(['Composite Key'], axis=1)
 
-            if df_bp_new['Is in BOM'].dtype == bool:
-                in_bom_count = df_bp_new['Is in BOM'].sum()
-                print(f"  Результат: {in_bom_count} из {len(df_bp_new)} деталей найдены в BOM")
-            else:
-                print("  Результат: проверка выполнена")
-        except KeyError as e:
-            print(f"Ошибка: Отсутствует необходимая колонка в BOM файле: {e}")
-            df_bp_new['Is in BOM'] = 'Error'
-    else:
-        df_bp_new['Is in BOM'] = 'Unknown'
-        print("  Проверка не выполнена: отсутствуют необходимые колонки или BOM файл")
+                if df_bp_new['Is in BOM'].dtype == bool:
+                    in_bom_count = df_bp_new['Is in BOM'].sum()
+                    print(f"  Результат: {in_bom_count} из {len(df_bp_new)} деталей найдены в BOM")
+                else:
+                    print("  Результат: проверка выполнена")
+            except KeyError as e:
+                print(f"Ошибка: Отсутствует необходимая колонка в BOM файле: {e}")
+                df_bp_new['Is in BOM'] = 'Error'
+        else:
+            df_bp_new['Is in BOM'] = 'Unknown'
+            print("  Проверка не выполнена: отсутствуют необходимые колонки или BOM файл")
 
-    show_dataframe_preview(
-        df_bp_new, "Проверка наличия в BOM",
-        focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Is in BOM']
-    )
+        show_dataframe_preview(
+            df_bp_new, "Проверка наличия в BOM",
+            focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Is in BOM']
+        )
 
-    continue_flag, df_bp_new, saved_state = confirm_step("Проверка наличия в BOM", df_bp_new, saved_state)
-    if not continue_flag:
-        return process_bp_file(bp_filename, df_bom)
+        continue_flag, df_bp_new, saved_state = confirm_step("Проверка наличия в BOM", df_bp_new, saved_state)
+        if continue_flag:
+            break
+        # retry - повторяем шаг 16
 
     # Шаг 17: Упорядочивание колонок
-    print_step_header(17, 18, "Упорядочивание колонок")
-    bp_columns_order = [
-        'BP_No', 'Status', 'In Stock', 'New Part Available Date', 'BOM Product',
-        'Change', 'Update Type', 'Is in BOM', 'Part No.', 'Part Name (RUS)', 'Quantity',
-        'Quantity in SS', 'Workcenter No.', 'Workcenter Name', 'Production Part Disposal',
-        'Interchangeable', 'Supplier Name (RUS)', 'Localization', 'Change Description (RUS)', 'Solution (RUS)',
-        'Color Code', 'Color Name (RUS)'
-    ]
+    while True:
+        print_step_header(17, 18, "Упорядочивание колонок")
+        bp_columns_order = [
+            'BP_No', 'Status', 'In Stock', 'New Part Available Date', 'BOM Product',
+            'Change', 'Update Type', 'Is in BOM', 'Part No.', 'Part Name (RUS)', 'Quantity',
+            'Quantity in SS', 'Workcenter No.', 'Workcenter Name', 'Production Part Disposal',
+            'Interchangeable', 'Supplier Name (RUS)', 'Localization', 'Change Description (RUS)', 'Solution (RUS)',
+            'Color Code', 'Color Name (RUS)'
+        ]
 
-    existing_cols = [col for col in bp_columns_order if col in df_bp_new.columns]
-    missing_cols_in_order = set(bp_columns_order) - set(existing_cols)
+        existing_cols = [col for col in bp_columns_order if col in df_bp_new.columns]
+        missing_cols_in_order = set(bp_columns_order) - set(existing_cols)
 
-    print(f"  Выбрано колонок для финального вывода: {len(existing_cols)} из {len(bp_columns_order)}")
-    if missing_cols_in_order:
-        print(f"  Отсутствуют в данных: {missing_cols_in_order}")
+        print(f"  Выбрано колонок для финального вывода: {len(existing_cols)} из {len(bp_columns_order)}")
+        if missing_cols_in_order:
+            print(f"  Отсутствуют в данных: {missing_cols_in_order}")
 
-    df_bp_new = df_bp_new[existing_cols]
-    show_dataframe_preview(
-        df_bp_new, "Упорядочивание колонок (финальный результат)",
-        focus_columns=['BP_No', 'Status', 'Change', 'Part No.', 'Part Name (RUS)', 'Is in BOM']
-    )
+        df_bp_new = df_bp_new[existing_cols]
+        show_dataframe_preview(
+            df_bp_new, "Упорядочивание колонок (финальный результат)",
+            focus_columns=['BP_No', 'Status', 'Change', 'Part No.', 'Part Name (RUS)', 'Is in BOM']
+        )
 
-    continue_flag, df_bp_new, saved_state = confirm_step("Упорядочивание колонок", df_bp_new, saved_state)
-    if not continue_flag:
-        return process_bp_file(bp_filename, df_bom)
+        continue_flag, df_bp_new, saved_state = confirm_step("Упорядочивание колонок", df_bp_new, saved_state)
+        if continue_flag:
+            break
+        # retry - повторяем шаг 17
 
     # Шаг 18: Сохранение результата
     print_step_header(18, 18, "Сохранение результата")
