@@ -36,6 +36,8 @@ from datetime import datetime
 from typing import Optional
 
 import pandas as pd
+from pandas.errors import EmptyDataError, ParserError
+from openpyxl.utils.exceptions import InvalidFileException
 
 from bp_refactoring import main as refactoring_main
 from bp_summary import main as summary_main
@@ -74,11 +76,11 @@ def wait_for_user(prompt="\nНажмите Enter для продолжения..
         except KeyboardInterrupt:
             print()  # Переход на новую строку
             while True:
-                confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
-                if confirm == 'да':
+                confirm_word = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                if confirm_word == 'да':
                     print("\n\nПрограмма прервана пользователем (Ctrl+C)")
                     sys.exit(0)
-                elif confirm == 'нет':
+                elif confirm_word == 'нет':
                     print("\nПродолжаем работу...")
                     break  # Выходим из внутреннего цикла и продолжаем внешний
                 else:
@@ -151,6 +153,7 @@ def load_breakpoint_data(file_prefix: str = 'breakpoint_data') -> Optional[pd.Da
         При ошибке загрузки выводится сообщение и возвращается None,
         что сигнализирует о необходимости создания нового файла.
     """
+
     latest_file = find_latest_breakpoint_file(file_prefix)
 
     if latest_file is None:
@@ -164,8 +167,39 @@ def load_breakpoint_data(file_prefix: str = 'breakpoint_data') -> Optional[pd.Da
         print(f"  Файл '{latest_file}' загружен успешно")
         print(f"  В нём уже {len(df)} строк")
         return df
+    except FileNotFoundError:
+        print(f"  Ошибка: Файл '{latest_file}' не найден")
+        print("  Будет создан новый файл")
+        return None
+    except PermissionError:
+        print(f"  Ошибка: Нет прав для чтения файла '{latest_file}'")
+        print("  Закройте файл, если он открыт в Excel, и попробуйте снова.")
+        print("  Будет создан новый файл")
+        return None
+    except EmptyDataError:
+        print(f"  Ошибка: Файл '{latest_file}' пуст")
+        print("  Будет создан новый файл")
+        return None
+    except ParserError as e:
+        print(f"  Ошибка: Файл '{latest_file}' повреждён или имеет неверный формат: {e}")
+        print("  Будет создан новый файл")
+        return None
+    except InvalidFileException:
+        print(f"  Ошибка: Файл '{latest_file}' не является корректным Excel файлом")
+        print("  Будет создан новый файл")
+        return None
+    except ValueError as e:
+        if "Excel file format cannot be determined" in str(e):
+            print(f"  Ошибка: Не удалось определить формат файла '{latest_file}'")
+            print("  Убедитесь, что файл имеет расширение .xlsx или .xls")
+        else:
+            print(f"  Ошибка при загрузке файла '{latest_file}': {e}")
+        print("  Будет создан новый файл")
+        return None
     except Exception as e:
-        print(f"  Ошибка при загрузке '{latest_file}': {e}")
+        # Непредвиденная ошибка
+        print(f"  НЕПРЕДВИДЕННАЯ ОШИБКА при загрузке файла '{latest_file}': {e}")
+        print(f"  Тип ошибки: {type(e).__name__}")
         print("  Будет создан новый файл")
         return None
 
@@ -463,11 +497,11 @@ def save_processed_dataframe(
                     print()
                     while True:
                         try:
-                            confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
-                            if confirm == 'да':
+                            confirm_word = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                            if confirm_word == 'да':
                                 print("\n\nПрограмма прервана пользователем (Ctrl+C)")
                                 sys.exit(0)
-                            elif confirm == 'нет':
+                            elif confirm_word == 'нет':
                                 print("\nПродолжаем работу...")
                                 break
                             else:
@@ -622,23 +656,8 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print()
-        while True:
-            try:
-                confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
-                if confirm == 'да':
-                    print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-                    sys.exit(0)
-                elif confirm == 'нет':
-                    print("\nПродолжаем работу...")
-                    # Повторный запуск main() для продолжения
-                    main()
-                    break
-                else:
-                    print("Пожалуйста, введите 'да' или 'нет'")
-            except KeyboardInterrupt:
-                print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-                sys.exit(0)
+        print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+        sys.exit(0)
     except Exception as e:
         print(f"\n\nОшибка: {e}")
         traceback.print_exc()
