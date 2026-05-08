@@ -60,25 +60,38 @@ if sys.platform == 'win32':
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 
-def wait_for_user(
-        prompt="\nНажмите Enter для продолжения..."
-    ):
+def wait_for_user(prompt="\nНажмите Enter для продолжения..."):
     """
     Ожидает нажатия клавиши Enter от пользователя.
 
-    Обрабатывает Ctrl+C и EOF для корректного завершения программы.
-
     Аргументы:
-        prompt (str): Текст приглашения к вводу.
+        prompt (str): Текст приглашения к вводу. По умолчанию содержит инструкцию.
+
+    Обрабатывается:
+        - KeyboardInterrupt (Ctrl+C) - запрашивает подтверждение перед завершением
+        - EOFError - завершает программу при обнаружении конца ввода
     """
-    try:
-        input(prompt)
-    except KeyboardInterrupt:
-        print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-        sys.exit(0)
-    except EOFError:
-        print("\n\nОбнаружен конец ввода. Программа завершена.")
-        sys.exit(0)
+    while True:  # Цикл для повторной попытки ввода
+        try:
+            user_input = input(prompt)
+            return user_input
+        except KeyboardInterrupt:
+            print()  # Переход на новую строку
+            while True:
+                confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                if confirm == 'да':
+                    print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                    sys.exit(0)
+                elif confirm == 'нет':
+                    print("\nПродолжаем работу...")
+                    break  # Выходим из внутреннего цикла и продолжаем внешний
+                else:
+                    print("Пожалуйста, введите 'да' или 'нет'")
+            # После break из внутреннего цикла, продолжаем внешний цикл
+            continue
+        except EOFError:
+            print("\n\nОбнаружен конец ввода. Программа завершена.")
+            sys.exit(0)
 
 
 def print_step_header(
@@ -162,28 +175,27 @@ def confirm_step(
             - new_saved_state (pd.DataFrame): Новое сохранённое состояние
     """
     print(f"\n  Шаг '{step_name}' выполнен.")
-    try:
-        user_input = input(
-            "\nПроверьте результат. Если всё корректно, нажмите Enter. Если нужно повторить шаг, введите 'retry': "
-        ).strip().lower()
-    except KeyboardInterrupt:
-        print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-        sys.exit(0)
-    except EOFError:
-        print("\n\nОбнаружен конец ввода. Программа завершена.")
-        sys.exit(0)
-
-    if user_input == 'retry':
-        print(f"Повторяем шаг '{step_name}'...\n")
-        restored_df = restore_state(saved_state, step_name)
-        if restored_df is not None:
-            return False, restored_df, saved_state
-        else:
-            return False, df_current, saved_state
-    else:
-        print("Продолжаем...\n")
-        new_saved_state = save_state_before_step(df_current)
-        return True, df_current, new_saved_state
+    while True:
+        try:
+            user_input = input(
+                "\nПроверьте результат. Если всё корректно, нажмите Enter. Если нужно повторить шаг, введите 'retry': "
+            ).strip().lower()
+            break
+        except KeyboardInterrupt:
+            print()
+            while True:
+                confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                if confirm == 'да':
+                    print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                    sys.exit(0)
+                elif confirm == 'нет':
+                    print("\nПродолжаем работу...")
+                    break  # Продолжаем ввод
+                else:
+                    print("Пожалуйста, введите 'да' или 'нет'")
+        except EOFError:
+            print("\n\nОбнаружен конец ввода. Программа завершена.")
+            sys.exit(0)
 
 
 def safe_float_convert(
@@ -706,19 +718,7 @@ def user_input_for_single_bp(
     ) -> pd.DataFrame:
     """
     Запрашивает у пользователя ввод данных для всего технического изменения (BP).
-
-    Функция запрашивает:
-        - Batch fact: номер партии для After деталей
-        - Change Date: дата внесения изменения
-
-    Введённые значения применяются ко всем строкам DataFrame.
-
-    Аргументы:
-        df_current (pd.DataFrame): Текущий DataFrame с данными BP.
-        bp_number (str): Номер BP для вывода в сообщениях.
-
-    Возвращается:
-        pd.DataFrame: DataFrame с заполненными полями 'Batch fact' и 'Change Date'.
+    ...
     """
     print(f"\n--- Ввод данных для BP {bp_number} ---")
     print(f"Всего строк для обработки: {len(df_current)}")
@@ -730,12 +730,46 @@ def user_input_for_single_bp(
     # Batch fact
     current_batch_fact = safe_str_convert(df_result.iloc[0].get('Batch fact', '')) if len(df_result) > 0 else ''
     print(f"Текущее Batch fact: {current_batch_fact if current_batch_fact else '(пусто)'}")
-    batch_fact_input = input("Введите Batch fact (или Enter, чтобы оставить пустым): ").strip()
+
+    # Защищённый ввод для Batch fact
+    while True:
+        try:
+            batch_fact_input = input("Введите Batch fact (или Enter, чтобы оставить пустым): ").strip()
+            break
+        except KeyboardInterrupt:
+            print()
+            while True:
+                confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                if confirm == 'да':
+                    print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                    sys.exit(0)
+                elif confirm == 'нет':
+                    print("\nПродолжаем работу...")
+                    break
+                else:
+                    print("Пожалуйста, введите 'да' или 'нет'")
 
     # Change Date
     current_change_date = safe_str_convert(df_result.iloc[0].get('Change Date', '')) if len(df_result) > 0 else ''
     print(f"Текущее Change Date: {current_change_date if current_change_date else '(пусто)'}")
-    change_date_input = input("Введите Change Date (ГГГГ-ММ-ДД или Enter, чтобы оставить пустым): ").strip()
+
+    # Защищённый ввод для Change Date
+    while True:
+        try:
+            change_date_input = input("Введите Change Date (ГГГГ-ММ-ДД или Enter, чтобы оставить пустым): ").strip()
+            break
+        except KeyboardInterrupt:
+            print()
+            while True:
+                confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                if confirm == 'да':
+                    print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                    sys.exit(0)
+                elif confirm == 'нет':
+                    print("\nПродолжаем работу...")
+                    break
+                else:
+                    print("Пожалуйста, введите 'да' или 'нет'")
 
     if batch_fact_input:
         df_result['Batch fact'] = batch_fact_input
@@ -906,7 +940,28 @@ def batch_file_loader_for_single_bp(
             print(f"  Название: {part_name_before[:50] + '...' if len(part_name_before) > 50 else part_name_before}")
 
             while True:
-                filename = input("  Введите имя файла упаковочного листа (или Enter чтобы пропустить): ").strip()
+                # Защищённый ввод имени файла
+                while True:
+                    try:
+                        filename = input("  Введите имя файла упаковочного листа (или Enter чтобы пропустить): ").strip()
+                        break
+                    except KeyboardInterrupt:
+                        print()
+                        while True:
+                            try:
+                                confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                                if confirm == 'да':
+                                    print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                                    sys.exit(0)
+                                elif confirm == 'нет':
+                                    print("\nПродолжаем работу...")
+                                    break
+                                else:
+                                    print("Пожалуйста, введите 'да' или 'нет'")
+                            except KeyboardInterrupt:
+                                print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                                sys.exit(0)
+                        continue
 
                 if filename == '':
                     print("    → Пропущено. Данные будут заполнены позже в Excel.")
@@ -928,10 +983,34 @@ def batch_file_loader_for_single_bp(
                     break
                 else:
                     print("    → Файл не найден. Проверьте имя файла и попробуйте снова.")
-                    retry = input("    Повторить? (Enter - да, 'no' - пропустить): ").strip().lower()
+
+                    # Защищённый ввод для retry
+                    while True:
+                        try:
+                            retry = input("    Повторить? (Enter - да, 'no' - пропустить): ").strip().lower()
+                            break
+                        except KeyboardInterrupt:
+                            print()
+                            while True:
+                                try:
+                                    confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                                    if confirm == 'да':
+                                        print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                                        sys.exit(0)
+                                    elif confirm == 'нет':
+                                        print("\nПродолжаем работу...")
+                                        break
+                                    else:
+                                        print("Пожалуйста, введите 'да' или 'нет'")
+                                except KeyboardInterrupt:
+                                    print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                                    sys.exit(0)
+                            continue
+                    
                     if retry == 'no':
                         print("    → Пропущено.")
                         break
+                    # Если Enter или другое значение - продолжаем цикл (повторный ввод имени файла)
 
     # === Обработка After деталей (только если есть Batch fact) ===
     print("\n[ОБРАБОТКА AFTER ДЕТАЛЕЙ]")
@@ -954,7 +1033,28 @@ def batch_file_loader_for_single_bp(
                 print(f"  Batch fact: {batch_fact}")
 
                 while True:
-                    filename = input("  Введите имя файла упаковочного листа (или Enter чтобы пропустить): ").strip()
+                    # Защищённый ввод имени файла
+                    while True:
+                        try:
+                            filename = input("  Введите имя файла упаковочного листа (или Enter чтобы пропустить): ").strip()
+                            break
+                        except KeyboardInterrupt:
+                            print()
+                            while True:
+                                try:
+                                    confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                                    if confirm == 'да':
+                                        print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                                        sys.exit(0)
+                                    elif confirm == 'нет':
+                                        print("\nПродолжаем работу...")
+                                        break
+                                    else:
+                                        print("Пожалуйста, введите 'да' или 'нет'")
+                                except KeyboardInterrupt:
+                                    print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                                    sys.exit(0)
+                            continue
 
                     if filename == '':
                         print("    → Пропущено. Данные будут заполнены позже в Excel.")
@@ -976,10 +1076,34 @@ def batch_file_loader_for_single_bp(
                         break
                     else:
                         print("    → Файл не найден. Проверьте имя файла и попробуйте снова.")
-                        retry = input("    Повторить? (Enter - да, 'no' - пропустить): ").strip().lower()
+
+                        # Защищённый ввод для retry
+                        while True:
+                            try:
+                                retry = input("    Повторить? (Enter - да, 'no' - пропустить): ").strip().lower()
+                                break
+                            except KeyboardInterrupt:
+                                print()
+                                while True:
+                                    try:
+                                        confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                                        if confirm == 'да':
+                                            print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                                            sys.exit(0)
+                                        elif confirm == 'нет':
+                                            print("\nПродолжаем работу...")
+                                            break
+                                        else:
+                                            print("Пожалуйста, введите 'да' или 'нет'")
+                                    except KeyboardInterrupt:
+                                        print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                                        sys.exit(0)
+                                continue
+    
                         if retry == 'no':
                             print("    → Пропущено.")
                             break
+                        # Если Enter или другое значение - продолжаем цикл (повторный ввод имени файла)
             else:
                 print(f"\n  Деталь After: {part_no_after} - пропущена (не указан Batch fact)")
 
@@ -988,7 +1112,6 @@ def batch_file_loader_for_single_bp(
     print("=" * 60)
 
     return df_result
-
 
 def extract_packaging_data(
         df_batch: pd.DataFrame,

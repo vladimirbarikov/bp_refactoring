@@ -64,17 +64,31 @@ def wait_for_user(prompt="\nНажмите Enter для продолжения..
         prompt (str): Текст приглашения к вводу. По умолчанию содержит инструкцию.
 
     Обрабатывается:
-        - KeyboardInterrupt (Ctrl+C) - завершает программу
+        - KeyboardInterrupt (Ctrl+C) - запрашивает подтверждение перед завершением
         - EOFError - завершает программу при обнаружении конца ввода
     """
-    try:
-        input(prompt)
-    except KeyboardInterrupt:
-        print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-        sys.exit(0)
-    except EOFError:
-        print("\n\nОбнаружен конец ввода. Программа завершена.")
-        sys.exit(0)
+    while True:  # Цикл для повторной попытки ввода
+        try:
+            user_input = input(prompt)
+            return user_input  # Успешный ввод
+        except KeyboardInterrupt:
+            print()  # Переход на новую строку
+            while True:
+                confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                if confirm == 'да':
+                    print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                    sys.exit(0)
+                elif confirm == 'нет':
+                    print("\nПродолжаем работу...")
+                    break  # Выходим из внутреннего цикла и продолжаем внешний
+                else:
+                    print("Пожалуйста, введите 'да' или 'нет'")
+            # После break из внутреннего цикла, продолжаем внешний цикл
+            # То есть снова показываем prompt и ждём ввод
+            continue
+        except EOFError:
+            print("\n\nОбнаружен конец ввода. Программа завершена.")
+            sys.exit(0)
 
 
 def find_latest_breakpoint_file(file_prefix: str = 'breakpoint_data') -> Optional[str]:
@@ -440,7 +454,29 @@ def save_processed_dataframe(
             print(f"    Существующие колонки: {list(df_existing.columns)}")
             print(f"    Новые колонки: {list(df_new_data.columns)}")
 
-            proceed = input("  Продолжить объединение? (да/нет): ").strip().lower()
+            # Защищённый ввод для подтверждения объединения
+            while True:
+                try:
+                    proceed = input("  Продолжить объединение? (да/нет): ").strip().lower()
+                    break
+                except KeyboardInterrupt:
+                    print()
+                    while True:
+                        try:
+                            confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                            if confirm == 'да':
+                                print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                                sys.exit(0)
+                            elif confirm == 'нет':
+                                print("\nПродолжаем работу...")
+                                break
+                            else:
+                                print("Пожалуйста, введите 'да' или 'нет'")
+                        except KeyboardInterrupt:
+                            print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                            sys.exit(0)
+                    continue
+
             if proceed != 'да':
                 print("  Объединение отменено. Новые данные будут сохранены в отдельный файл.")
                 current_date = datetime.now().strftime('%Y-%m-%d')
@@ -586,8 +622,23 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n\nПрограмма прервана пользователем")
-        sys.exit(0)
+        print()
+        while True:
+            try:
+                confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                if confirm == 'да':
+                    print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                    sys.exit(0)
+                elif confirm == 'нет':
+                    print("\nПродолжаем работу...")
+                    # Повторный запуск main() для продолжения
+                    main()
+                    break
+                else:
+                    print("Пожалуйста, введите 'да' или 'нет'")
+            except KeyboardInterrupt:
+                print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                sys.exit(0)
     except Exception as e:
         print(f"\n\nОшибка: {e}")
         traceback.print_exc()

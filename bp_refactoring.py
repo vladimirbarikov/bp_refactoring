@@ -125,19 +125,34 @@ def wait_for_user(prompt="\nНажмите Enter для продолжения..
     """
     Ожидает нажатия клавиши Enter от пользователя.
 
-    Обрабатывает Ctrl+C и EOF для корректного завершения программы.
-
     Аргументы:
-        prompt (str): Текст приглашения к вводу.
+        prompt (str): Текст приглашения к вводу. По умолчанию содержит инструкцию.
+
+    Обрабатывается:
+        - KeyboardInterrupt (Ctrl+C) - запрашивает подтверждение перед завершением
+        - EOFError - завершает программу при обнаружении конца ввода
     """
-    try:
-        input(prompt)
-    except KeyboardInterrupt:
-        print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-        sys.exit(0)
-    except EOFError:
-        print("\n\nОбнаружен конец ввода. Программа завершена.")
-        sys.exit(0)
+    while True:  # Цикл для повторной попытки ввода
+        try:
+            user_input = input(prompt)
+            return user_input
+        except KeyboardInterrupt:
+            print()  # Переход на новую строку
+            while True:
+                confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                if confirm == 'да':
+                    print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                    sys.exit(0)
+                elif confirm == 'нет':
+                    print("\nПродолжаем работу...")
+                    break  # Выходим из внутреннего цикла и продолжаем внешний
+                else:
+                    print("Пожалуйста, введите 'да' или 'нет'")
+            # После break из внутреннего цикла, продолжаем внешний цикл
+            continue
+        except EOFError:
+            print("\n\nОбнаружен конец ввода. Программа завершена.")
+            sys.exit(0)
 
 
 def print_step_header(step_num, total_steps, description):
@@ -462,23 +477,34 @@ def interactive_translation(data, field_name, examples=None):
             continue
 
         print(f"\n[{i}/{len(data)}] Оригинал: {value}")
-        try:
-            user_input = input(
-                "Введите перевод (или просто Enter чтобы оставить оригинал): "
-            ).strip()
-        except KeyboardInterrupt:
-            print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-            sys.exit(0)
-        except EOFError:
-            print("\n\nКонец ввода. Программа завершена.")
-            sys.exit(0)
+        while True:
+            try:
+                user_input = input(
+                    "Введите перевод (или просто Enter чтобы оставить оригинал): "
+                ).strip()
+                break
+            except KeyboardInterrupt:
+                print()
+                while True:
+                    confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                    if confirm == 'да':
+                        print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                        sys.exit(0)
+                    elif confirm == 'нет':
+                        print("\nПродолжаем работу...")
+                        break  # Продолжаем ввод
+                    else:
+                        print("Пожалуйста, введите 'да' или 'нет'")
+            except EOFError:
+                print("\n\nКонец ввода. Программа завершена.")
+                sys.exit(0)
 
-        if user_input == '':
-            translations[value] = value
-            print(f"  → Оставляем оригинал: {value}")
-        else:
-            translations[value] = user_input
-            print(f"  → Заменяем на: {user_input}")
+            if user_input == '':
+                translations[value] = value
+                print(f"  → Оставляем оригинал: {value}")
+            else:
+                translations[value] = user_input
+                print(f"  → Заменяем на: {user_input}")
 
     return translations
 
@@ -563,8 +589,8 @@ def load_latest_breakpoint_data(file_prefix: str = 'breakpoint_data') -> Optiona
     try:
         # Загружаем с указанием строки заголовка (3-я строка = header=2)
         df = pd.read_excel(latest_file, header=2)
-        print(f"  Загружен последний файл: {latest_file}")
-        print(f"  В нём {len(df)} строк")
+        print(f"  Файл: {latest_file} загружен успешно!")
+        print(f"  Размер: {df.shape[0]} строк × {df.shape[1]} колонок")
         return df
     except FileNotFoundError:
         print(f"  Ошибка: Файл '{latest_file}' не найден")
@@ -718,11 +744,9 @@ def new_bp_check():
         return None
 
     # Преобразование колонок (как в test_bp_check.py)
-    print("  Преобразование колонок...")
     df_filtered['IsUnBomBP'] = df_filtered['IsUnBomBP'].apply(safe_str_convert)
     df_filtered['Status'] = df_filtered['Status'].apply(safe_str_convert)
     df_filtered['Part Name (E)'] = df_filtered['Part Name (E)'].apply(safe_str_convert)
-
     df_filtered['Date'] = df_filtered['Date'].apply(safe_date_convert)
 
     # Фильтр 1: IsUnBomBP = "No"
@@ -735,7 +759,7 @@ def new_bp_check():
     initial_count = len(df_filtered)
     mask2 = df_filtered['Status'] != 'Closed'
     df_filtered = df_filtered[mask2]
-    print(f"    - Фильтр Status != 'Closed': {initial_count} → {len(df_filtered)} строк")
+    print(f"    - Фильтр Status ≠ 'Closed': {initial_count} → {len(df_filtered)} строк")
 
     # Фильтр 3: Date >= 01.04.2026 ИЛИ дата пустая
     initial_count = len(df_filtered)
@@ -768,10 +792,6 @@ def new_bp_check():
             set_bp = {bp for bp in set_bp if bp and bp != 'nan' and bp != 'None'}
 
         print(f"\n  Уникальных BP из bp_list (после фильтров): {len(set_bp)}")
-        if len(set_bp) > 0 and len(set_bp) <= 20:
-            print(f"    Список: {sorted(set_bp)}")
-        elif len(set_bp) > 20:
-            print(f"    (Слишком много BP для отображения: {len(set_bp)} шт.)")
 
     except KeyError as e:
         print(f"  ОШИБКА: Колонка 'BP' не найдена при создании set: {e}")
@@ -842,16 +862,27 @@ def confirm_step(step_name, df_bp_new, saved_state):
             - new_saved_state (pd.DataFrame): Новое сохранённое состояние
     """
     print(f"\n  Шаг '{step_name}' выполнен.")
-    try:
-        user_input = input(
-            "\nПроверьте результат. Если всё корректно, нажмите Enter. Если нужно повторить шаг, введите 'retry': "
-        ).strip().lower()
-    except KeyboardInterrupt:
-        print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-        sys.exit(0)
-    except EOFError:
-        print("\n\nОбнаружен конец ввода. Программа завершена.")
-        sys.exit(0)
+    while True:
+        try:
+            user_input = input(
+                "\nПроверьте результат. Если всё корректно, нажмите Enter. Если нужно повторить шаг, введите 'retry': "
+            ).strip().lower()
+            break
+        except KeyboardInterrupt:
+            print()
+            while True:
+                confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                if confirm == 'да':
+                    print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                    sys.exit(0)
+                elif confirm == 'нет':
+                    print("\nПродолжаем работу...")
+                    break  # Продолжаем ввод
+                else:
+                    print("Пожалуйста, введите 'да' или 'нет'")
+        except EOFError:
+            print("\n\nОбнаружен конец ввода. Программа завершена.")
+            sys.exit(0)
 
     if user_input == 'retry':
         print(f"Повторяем шаг '{step_name}'...\n")
@@ -902,13 +933,37 @@ def get_bp_status(bp_number):
             elif choice == '3':
                 return "Закрыт\nClosed"
             elif choice == '4':
-                custom_status = input("  Введите свой статус: ").strip()
+                while True:
+                    try:
+                        custom_status = input("  Введите свой статус: ").strip()
+                        break
+                    except KeyboardInterrupt:
+                        print()
+                        while True:
+                            confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                            if confirm == 'да':
+                                print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                                sys.exit(0)
+                            elif confirm == 'нет':
+                                print("\nПродолжаем работу...")
+                                break
+                            else:
+                                print("Пожалуйста, введите 'да' или 'нет'")
                 return custom_status if custom_status else "Согласован\nApproved"
             else:
                 print("  Неверный выбор. Пожалуйста, введите число от 1 до 4.")
         except KeyboardInterrupt:
-            print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-            sys.exit(0)
+            print()
+            while True:
+                confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                if confirm == 'да':
+                    print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                    sys.exit(0)
+                elif confirm == 'нет':
+                    print("\nПродолжаем работу...")
+                    break
+                else:
+                    print("Пожалуйста, введите 'да' или 'нет'")
 
 
 def classify_row_for_quantity_ss(row: pd.Series) -> str:
@@ -1026,8 +1081,17 @@ def get_quantity_in_ss(df_bp_new, bp_number):
         try:
             part_input = input("  → ").strip()
         except KeyboardInterrupt:
-            print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-            sys.exit(0)
+            print()
+            while True:
+                confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                if confirm == 'да':
+                    print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                    sys.exit(0)
+                elif confirm == 'нет':
+                    print("\nПродолжаем работу...")
+                    break
+                else:
+                    print("Пожалуйста, введите 'да' или 'нет'")
 
         # Если Enter - устанавливаем 0 для всех оставшихся
         if part_input == '':
@@ -1047,8 +1111,17 @@ def get_quantity_in_ss(df_bp_new, bp_number):
             try:
                 qty_input = input(f"  Введите количество для детали {part_input}: ").strip()
             except KeyboardInterrupt:
-                print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-                sys.exit(0)
+                print()
+                while True:
+                    confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                    if confirm == 'да':
+                        print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                        sys.exit(0)
+                    elif confirm == 'нет':
+                        print("\nПродолжаем работу...")
+                        break
+                    else:
+                        print("Пожалуйста, введите 'да' или 'нет'")
 
             if qty_input == '':
                 quantity = 0
@@ -1152,8 +1225,17 @@ def get_supplier_localization_status(df_bp_new, bp_number):
                 else:
                     print("  Неверный выбор. Пожалуйста, введите число от 1, 2 или нажмите Enter.")
             except KeyboardInterrupt:
-                print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-                sys.exit(0)
+                print()
+                while True:
+                    confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                    if confirm == 'да':
+                        print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                        sys.exit(0)
+                    elif confirm == 'нет':
+                        print("\nПродолжаем работу...")
+                        break
+                    else:
+                        print("Пожалуйста, введите 'да' или 'нет'")
 
         localization_statuses[supplier] = status
 
@@ -1224,8 +1306,17 @@ def translate_production_part_disposal(df_bp_new, bp_number):
                     print(f"    → Сохранено: {user_input}\\n{value}")
                 break
             except KeyboardInterrupt:
-                print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-                sys.exit(0)
+                print()
+                while True:
+                    confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                    if confirm == 'да':
+                        print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                        sys.exit(0)
+                    elif confirm == 'нет':
+                        print("\nПродолжаем работу...")
+                        break
+                    else:
+                        print("Пожалуйста, введите 'да' или 'нет'")
 
     # Применяем переводы
     df_bp_new['Production Part Disposal'] = df_bp_new['Production Part Disposal'].map(translations).fillna(df_bp_new['Production Part Disposal'])
@@ -1294,8 +1385,17 @@ def translate_interchangeable(df_bp_new, bp_number):
                     print(f"    → Сохранено: {user_input}\\n{value}")
                 break
             except KeyboardInterrupt:
-                print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-                sys.exit(0)
+                print()
+                while True:
+                    confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                    if confirm == 'да':
+                        print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                        sys.exit(0)
+                    elif confirm == 'нет':
+                        print("\nПродолжаем работу...")
+                        break
+                    else:
+                        print("Пожалуйста, введите 'да' или 'нет'")
 
     # Применяем переводы
     df_bp_new['Interchangeable'] = df_bp_new['Interchangeable'].map(translations).fillna(df_bp_new['Interchangeable'])
@@ -1336,7 +1436,7 @@ def process_bp_file(bp_filename, df_bom):
         6. Перевод названий деталей
         7. Поиск официальных названий поставщиков
         8. Ввод статуса локализации поставщиков
-        9. Фильтрация китайских символов
+        9. Фильтрация китайских символов в описании и решении
         10. Перевод описания к изменению
         11. Перевод решения к изменению
         12. Обработка цветов и Color Code
@@ -1536,23 +1636,13 @@ def process_bp_file(bp_filename, df_bom):
         # retry - повторяем шаг 8
 
     # Шаг 9: Фильтрация китайских символов
-    while True:
-        print_step_header(9, 18, "Фильтрация китайских символов")
-        if 'Change Description' in df_bp_new.columns:
-            df_bp_new['Change Description'] = df_bp_new['Change Description'].apply(filter_chinese_lines)
-            print("  Колонка 'Change Description': фильтрация выполнена")
-        if 'Solution' in df_bp_new.columns:
-            df_bp_new['Solution'] = df_bp_new['Solution'].apply(filter_chinese_lines)
-            print("  Колонка 'Solution': фильтрация выполнена")
-        show_dataframe_preview(
-            df_bp_new, "Фильтрация китайских символов",
-            focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Change Description', 'Solution']
-        )
-
-        continue_flag, df_bp_new, saved_state = confirm_step("Фильтрация китайских символов", df_bp_new, saved_state)
-        if continue_flag:
-            break
-        # retry - повторяем шаг 9
+    print_step_header(9, 18, "Фильтрация китайских символов")
+    if 'Change Description' in df_bp_new.columns:
+        df_bp_new['Change Description'] = df_bp_new['Change Description'].apply(filter_chinese_lines)
+        print("  Колонка 'Change Description': фильтрация выполнена")
+    if 'Solution' in df_bp_new.columns:
+        df_bp_new['Solution'] = df_bp_new['Solution'].apply(filter_chinese_lines)
+        print("  Колонка 'Solution': фильтрация выполнена")
 
     # Шаг 10: Перевод описания
     while True:
@@ -1848,34 +1938,13 @@ def main():
         print("  ВНИМАНИЕ: Найдены новые BP, которые отсутствуют в breakpoint_data.xlsx!")
         print("!" * 60)
         print("\n  Действия пользователя:")
-        print("    1. Скачайте из системы G-BOM Excel файлы для следующих BP:")
-        for bp in sorted(new_bp_set):
-            print(f"       - {bp}")
+        print("    1. Скачайте из системы G-BOM все отсустсвующие Excel файлы BP")
         print("    2. Поместите скачанные файлы в текущую папку")
         print("    3. Убедитесь, что файлы имеют формат: BP<номер>.xlsx")
         print("\n  После скачивания файлов программа продолжит работу.")
 
         wait_for_user("\n  Нажмите Enter, когда все файлы будут скачаны и помещены в текущую папку...")
 
-        # Проверяем, появились ли файлы
-        expected_files = [f"{bp}.xlsx" for bp in new_bp_set]
-        missing_files = []
-
-        print("\n  Проверка наличия скачанных файлов:")
-        for expected_file in expected_files:
-            if os.path.exists(expected_file):
-                print(f"    {expected_file} - найден")
-            else:
-                print(f"    {expected_file} - НЕ НАЙДЕН")
-                missing_files.append(expected_file)
-
-        if missing_files:
-            print("\n  Предупреждение: Не все файлы найдены!")
-            print("  Отсутствуют:", missing_files)
-            proceed = input("\n  Продолжить с имеющимися файлами? (да/нет): ").strip().lower()
-            if proceed != 'да':
-                print("  Программа завершена. Скачайте недостающие файлы и запустите снова.")
-                sys.exit(0)
     else:
         print("\n  Новых BP для обработки не найдено.")
         print("-" * 60)
@@ -1884,7 +1953,22 @@ def main():
         print("  вы можете указать их номера вручную.")
         print("-" * 60)
 
-        manual_input = input("\n  Хотите указать BP номера для обработки вручную? (да/нет): ").strip().lower()
+        while True:
+            try:
+                manual_input = input("\n  Хотите указать BP номера для обработки вручную? (да/нет): ").strip().lower()
+                break
+            except KeyboardInterrupt:
+                print()
+                while True:
+                    confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                    if confirm == 'да':
+                        print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                        sys.exit(0)
+                    elif confirm == 'нет':
+                        print("\nПродолжаем работу...")
+                        break
+                    else:
+                        print("Пожалуйста, введите 'да' или 'нет'")
 
         if manual_input == 'да':
             print("\n  ИНСТРУКЦИЯ ПО ВВОДУ BP НОМЕРОВ:")
@@ -1910,7 +1994,7 @@ def main():
                     if bp_input.startswith('BP') and bp_input[2:].isdigit():
                         # Добавляем .xlsx если нужно
                         bp_filename = bp_input if bp_input.endswith('.xlsx') else f"{bp_input}.xlsx"
-                        
+
                         # Проверяем, существует ли файл в текущей папке
                         if os.path.exists(bp_filename):
                             manual_bp_files.append(bp_filename)
@@ -1925,8 +2009,17 @@ def main():
                         continue
 
                 except KeyboardInterrupt:
-                    print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-                    sys.exit(0)
+                    print()
+                    while True:
+                        confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                        if confirm == 'да':
+                            print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                            sys.exit(0)
+                        elif confirm == 'нет':
+                            print("\nПродолжаем работу...")
+                            break
+                        else:
+                            print("Пожалуйста, введите 'да' или 'нет'")
 
             # Проверяем, что введены файлы
             if not manual_bp_files:
@@ -1996,9 +2089,40 @@ def main():
         wait_for_user()
         sys.exit(1)
 
-    print(f"Найдено BP файлов: {len(bp_files)}")
-    for i, f in enumerate(bp_files, 1):
-        print(f"{i}. {f}")
+    # Проверяем, появились ли файлы
+    print("\n  Проверка наличия скачанных файлов:")
+    expected_files = [f"{bp}.xlsx" for bp in new_bp_set]
+    missing_files = []
+
+    for expected_file in expected_files:
+        if os.path.exists(expected_file):
+            print(f"    {expected_file} - найден")
+        else:
+            print(f"    {expected_file} - НЕ НАЙДЕН")
+            missing_files.append(expected_file)
+
+    if missing_files:
+        print("\n  Предупреждение: Не все файлы найдены!")
+        print("  Отсутствуют:", missing_files)
+        while True:
+            try:
+                proceed = input("\n  Продолжить с имеющимися файлами? (да/нет): ").strip().lower()
+                break
+            except KeyboardInterrupt:
+                print()
+                while True:
+                    confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                    if confirm == 'да':
+                        print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                        sys.exit(0)
+                    elif confirm == 'нет':
+                        print("\nПродолжаем работу...")
+                        break
+                    else:
+                        print("Пожалуйста, введите 'да' или 'нет'")
+        if proceed != 'да':
+            print("  Программа завершена. Скачайте недостающие файлы и запустите снова.")
+            sys.exit(0)
 
     # Пауза после поиска всех BP файлов
     wait_for_user()
