@@ -499,12 +499,12 @@ def interactive_translation(data, field_name, examples=None):
                 print("\n\nКонец ввода. Программа завершена.")
                 sys.exit(0)
 
-            if user_input == '':
-                translations[value] = value
-                print(f"  → Оставляем оригинал: {value}")
-            else:
-                translations[value] = user_input
-                print(f"  → Заменяем на: {user_input}")
+        if user_input == '':
+            translations[value] = value
+            print(f"  → Оставляем оригинал: {value}")
+        else:
+            translations[value] = user_input
+            print(f"  → Заменяем на: {user_input}")
 
     return translations
 
@@ -1559,7 +1559,7 @@ def process_bp_file(bp_filename, df_bom):
 
         show_dataframe_preview(
             df_bp_new, "Ввод количества деталей в SS",
-            focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Part No.', 'Part Name (CHN)', 'Quantity in SS']
+            focus_columns=['BP_No', 'Status', 'Update Type', 'BOM Product', 'Part No.', 'Part Name (CHN)', 'Quantity in SS']
         )
 
         continue_flag, df_bp_new, saved_state = confirm_step(
