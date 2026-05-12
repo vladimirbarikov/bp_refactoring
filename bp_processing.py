@@ -35,7 +35,7 @@ Breakpoint (BP). Он выполняет 18 последовательных ш�
 с existing breakpoint_data и bp_list_2025-2026.xlsx.
 
 Использование:
-    from bp_refactoring import main as refactoring_main
+    from bp_processing import main as processing_main
 
 Версия: 1.0
 Совместимость: Python 3.12.3+, Pandas 3.0.2+, OpenPyXL 3.1.5+

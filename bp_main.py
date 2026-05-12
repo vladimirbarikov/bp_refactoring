@@ -39,8 +39,8 @@ import pandas as pd
 from pandas.errors import EmptyDataError, ParserError
 from openpyxl.utils.exceptions import InvalidFileException
 
-from .bp_refactoring import main as refactoring_main
-from .bp_summary import main as summary_main
+from bp_processing import main as processing_main
+from bp_summary import main as summary_main
 
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
@@ -634,7 +634,7 @@ def main():
 
     # Шаг 1: Обработка BP файлов
     print("\n[1] Обработка BP файлов...")
-    processed_results = refactoring_main()
+    processed_results = processing_main()
 
     if not isinstance(processed_results, dict) or len(processed_results) == 0:
         print("\nОшибка: Не обработано ни одного BP файла!")
