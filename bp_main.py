@@ -39,8 +39,8 @@ import pandas as pd
 from pandas.errors import EmptyDataError, ParserError
 from openpyxl.utils.exceptions import InvalidFileException
 
-from bp_refactoring import main as refactoring_main
-from bp_summary import main as summary_main
+from .bp_refactoring import main as refactoring_main
+from .bp_summary import main as summary_main
 
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
