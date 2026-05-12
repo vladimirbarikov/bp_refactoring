@@ -134,6 +134,96 @@ def find_latest_breakpoint_file(file_prefix: str = 'breakpoint_data') -> Optiona
     return latest_file
 
 
+def normalize_breakpoint_data(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Нормализует DataFrame из файла breakpoint_data:
+    - Приводит колонки к правильным типам данных
+    - Заполняет пустые значения символом '-' (ВКЛЮЧАЯ колонки с датами)
+
+    Аргументы:
+        df (pd.DataFrame): DataFrame для нормализации.
+
+    Возвращается:
+        pd.DataFrame: Нормализованный DataFrame.
+
+    Примечание:
+        Функция создаёт копию DataFrame, не изменяя оригинал.
+        Все колонки приводятся к строковому типу для единообразия,
+        чтобы пустые значения можно было заменить на '-'.
+    """
+    if df is None or df.empty:
+        return df
+
+    df_normalized = df.copy()
+    columns_processed = []
+
+    # Определяем числовые колонки (они будут преобразованы в числа, затем в строки)
+    numeric_columns = [
+        'Quantity', 'Quantity in SS', 'Quantity per Vehicle Before',
+        'Quantity per Vehicle After', 'Quantity per Box Before',
+        'Quantity per Box After', 'Quantity batches in SS',
+        'Batches for old parts using out'
+    ]
+
+    # Колонки с датами (будут преобразованы в строки с заменой пустых на '-')
+    datetime_columns = ['Change Date', 'New Part Available Date']
+
+    # 1. Обработка числовых колонок
+    for col in numeric_columns:
+        if col in df_normalized.columns:
+            # Преобразуем в числовой тип (ошибки -> NaN)
+            df_normalized[col] = pd.to_numeric(df_normalized[col], errors='coerce')
+            # Заполняем NaN нулями
+            nan_count = df_normalized[col].isna().sum()
+            if nan_count > 0:
+                df_normalized[col] = df_normalized[col].fillna(0)
+                print(f"  Колонка '{col}': {nan_count} пустых значений заменено на 0")
+            columns_processed.append(col)
+
+    # 2. Обработка колонок с датами (преобразуем в строки с '-')
+    for col in datetime_columns:
+        if col in df_normalized.columns:
+            # Сначала пробуем преобразовать в datetime для валидации
+            # Затем приводим к строковому формату
+            temp_series = pd.to_datetime(df_normalized[col], errors='coerce')
+
+            # Форматируем даты в строку ГГГГ-ММ-ДД, а NaT заменяем на '-'
+            df_normalized[col] = temp_series.apply(
+                lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else '-'
+            )
+
+            # Считаем количество замен
+            empty_count = (df_normalized[col] == '-').sum()
+            if empty_count > 0:
+                print(f"  Колонка '{col}': {empty_count} пустых значений заменено на '-'")
+
+            columns_processed.append(col)
+
+    # 3. Обработка всех остальных колонок (строковые)
+    for col in df_normalized.columns:
+        if col not in columns_processed:
+            # Приводим к строковому типу
+            df_normalized[col] = df_normalized[col].astype(str)
+
+            # Заменяем пустые значения и 'nan' на '-'
+            empty_mask = (
+                (df_normalized[col].str.strip() == '') |
+                (df_normalized[col].str.strip() == 'nan') |
+                (df_normalized[col].str.strip() == 'None') |
+                (df_normalized[col].str.strip() == 'NaT')
+            )
+            empty_count = empty_mask.sum()
+
+            if empty_count > 0:
+                df_normalized.loc[empty_mask, col] = '-'
+                print(f"  Колонка '{col}': {empty_count} пустых значений заменено на '-'")
+
+            columns_processed.append(col)
+
+    print(f"\n  Нормализация завершена. Обработано колонок: {len(columns_processed)}")
+    return df_normalized
+
+
 def load_breakpoint_data(file_prefix: str = 'breakpoint_data') -> Optional[pd.DataFrame]:
     """
     Загружает самый свежий файл breakpoint_data с датой в имени.
@@ -166,7 +256,13 @@ def load_breakpoint_data(file_prefix: str = 'breakpoint_data') -> Optional[pd.Da
         df = pd.read_excel(latest_file, header=2)
         print(f"  Файл '{latest_file}' загружен успешно")
         print(f"  В нём уже {len(df)} строк")
+
+        # приводим данные к требуемым типам
+        print("\n  Выполняется нормализация данных...")
+        df = normalize_breakpoint_data(df)
+
         return df
+
     except FileNotFoundError:
         print(f"  Ошибка: Файл '{latest_file}' не найден")
         print("  Будет создан новый файл")
