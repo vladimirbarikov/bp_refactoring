@@ -47,6 +47,7 @@
 import io
 import os
 import sys
+import re
 import warnings
 from typing import Dict, List, Optional
 
@@ -58,6 +59,146 @@ warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
+
+def clean_surrogates(text):
+    """
+    Удаляет суррогатные символы Unicode из строки.
+
+    Суррогатные символы (коды U+D800-U+DFFF) являются невалидными
+    в кодировке UTF-8 и вызывают ошибку UnicodeEncodeError при попытке
+    сохранения в Excel через xlsxwriter.
+
+    Такие символы могут появляться в данных при:
+    - Чтении файлов с повреждённой кодировкой
+    - Обработке данных из разных источников с нестандартным Unicode
+    - Некорректной конвертации между кодировками
+
+    Аргументы:
+        text (str or any): Строка для очистки или любое другое значение.
+
+    Возвращается:
+        str or any: Очищенная строка без суррогатных символов или
+                    исходное значение, если аргумент не является строкой.
+
+    Примеры:
+        >>> clean_surrogates('Прокладка\udcd0 головки')
+        'Прокладка головки'
+        >>> clean_surrogates(123)
+        123
+        >>> clean_surrogates(None)
+        None
+    """
+    if isinstance(text, str):
+        return re.sub(r'[\ud800-\udfff]', '', text)
+    return text
+
+
+def clean_string_for_excel(text):
+    """
+    Выполняет полную очистку строки от проблемных символов для сохранения в Excel.
+
+    Обрабатывает следующие проблемы:
+    1. Суррогатные символы Unicode (U+D800-U+DFFF) — удаляются полностью
+    2. Символы перевода строки (\\n, \\r) — заменяются на обычные пробелы
+    3. Символы табуляции (\\t) — заменяются на обычные пробелы
+    4. Множественные пробелы — схлопываются в один
+    5. Пробелы в начале и конце строки — удаляются
+
+    Функция является композицией нескольких операций очистки и использует
+    clean_surrogates() как первый шаг обработки.
+
+    Аргументы:
+        text (str or any): Строка для очистки или любое другое значение.
+
+    Возвращается:
+        str or any: Полностью очищенная строка без проблемных символов или
+                    исходное значение, если аргумент не является строкой.
+
+    Примеры:
+        >>> clean_string_for_excel('Прокладка\\nголовки\\udcd0 блока')
+        'Прокладка головки блока'
+        >>> clean_string_for_excel('Деталь\\t\\tтест')
+        'Деталь тест'
+        >>> clean_string_for_excel('  много   пробелов  ')
+        'много пробелов'
+        >>> clean_string_for_excel(None)
+        None
+    """
+    if not isinstance(text, str):
+        return text
+
+    # Удаляем суррогатные символы (невалидные в UTF-8)
+    text = clean_surrogates(text)
+
+    # Заменяем переводы строк и табуляции на пробелы
+    text = text.replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+
+    # Схлопываем множественные пробелы в один
+    text = re.sub(r'\s+', ' ', text)
+
+    # Удаляем пробелы в начале и конце
+    text = text.strip()
+
+    return text
+
+
+def clean_dataframe_strings(df):
+    """
+    Очищает все строковые колонки DataFrame от проблемных символов.
+    
+    Применяет функцию clean_string_for_excel() ко всем значениям
+    в строковых колонках (dtype='object'). Обрабатывает каждую ячейку
+    индивидуально, отслеживая количество внесённых исправлений.
+
+    Функция не модифицирует исходный DataFrame, а возвращает его копию
+    с очищенными данными. Числовые колонки и колонки с другими типами
+    данных остаются без изменений.
+
+    Аргументы:
+        df (pd.DataFrame or None): DataFrame для очистки. Может быть None
+                                    или пустым DataFrame.
+
+    Возвращается:
+        pd.DataFrame or None: Копия DataFrame с очищенными строковыми данными.
+                              Возвращает None, если на входе был None.
+                              Возвращает пустой DataFrame, если на входе был
+                              пустой DataFrame.
+
+    Примечания:
+        - Функция выполняет глубокое копирование DataFrame (df.copy())
+        - Выводит информационное сообщение при обнаружении проблемных символов
+        - Обрабатывает только колонки с dtype='object' (строковые)
+        - Каждая ячейка проверяется на принадлежность к типу str
+
+    Примеры:
+        >>> df = pd.DataFrame({'A': ['тест\\nстрока', 'нормально'], 'B': [1, 2]})
+        >>> clean_df = clean_dataframe_strings(df)
+        [Очистка данных] Исправлено 1 ячеек с проблемными символами
+        >>> clean_df['A'].iloc[0]
+        'тест строка'
+    """
+    if df is None or df.empty:
+        return df
+
+    df_clean = df.copy()
+    cleaned_count = 0
+
+    for col in df_clean.columns:
+        # Обрабатываем только строковые/объектные колонки
+        if df_clean[col].dtype == 'object':
+            for idx in df_clean.index:
+                val = df_clean.at[idx, col]
+                if isinstance(val, str):
+                    cleaned_val = clean_string_for_excel(val)
+                    if cleaned_val != val:
+                        df_clean.at[idx, col] = cleaned_val
+                        cleaned_count += 1
+
+    if cleaned_count > 0:
+        print(f"  [Очистка данных] Исправлено {cleaned_count} ячеек с проблемными символами")
+
+    return df_clean
 
 
 def wait_for_user(prompt="\nНажмите Enter для продолжения..."):
@@ -290,6 +431,9 @@ def load_configuration_file(
         # Загружаем лист 'common'
         df_config = pd.read_excel(config_filename, sheet_name='common')
         print(f"Файл конфигурации '{config_filename}' (лист 'common') загружен: {df_config.shape[0]} строк")
+
+        # Очистка данных от проблемных символов
+        df_config = clean_dataframe_strings(df_config)
 
         # Проверяем наличие необходимых колонок
         required_cols = ['BOM Product', 'Quantity vehicle in batch']
@@ -1332,6 +1476,7 @@ def load_batch_file_by_name(
         # Загружаем первый лист
         df_batch = pd.read_excel(full_path, sheet_name=0)
         print(f"  Файл загружен: {filename} ({df_batch.shape[0]} строк)")
+        df_batch = clean_dataframe_strings(df_batch)  # Очистка данных от проблемных символов
         return df_batch
     except FileNotFoundError:
         print(f"  Ошибка: Файл '{full_path}' не найден")
