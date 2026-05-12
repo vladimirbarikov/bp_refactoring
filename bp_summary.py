@@ -201,45 +201,54 @@ def clean_dataframe_strings(df):
     return df_clean
 
 
-def fill_empty_values_with_dash(df) -> list:
+def fill_empty_values(df) -> list:
     """
-    Заполняет пустые значения во ВСЕХ колонках DataFrame символом '-'.
-    
-    Проверяет каждую колонку DataFrame и заменяет пустые значения
-    (None, NaN, пустая строка, 'nan', 'None') на символ '-'.
+    Заполняет пустые значения в колонках DataFrame:
+    - В числовых колонках (int64, float64): заменяет NaN на 0.0
+    - В нечисловых колонках (object, datetime): заменяет None, NaN, 
+      пустую строку, 'nan', 'None', 'NaT' на '-'
 
     Аргументы:
         df (pd.DataFrame): DataFrame для обработки.
 
     Возвращается:
         list: Список названий колонок, в которых были выполнены замены.
-
-    Примечание:
-        Пустыми считаются значения: None, NaN, пустая строка, 'nan', 'None'.
-        Числовые колонки с dtype int/float преобразуются в строковый тип
-        для унификации обработки.
     """
     columns_with_replacements = []
 
     for col in df.columns:
-        # Приводим колонку к строковому типу для единообразия
-        df[col] = df[col].astype(str)
+        # Определяем тип колонки
+        if pd.api.types.is_numeric_dtype(df[col]):
+            # ЧИСЛОВАЯ КОЛОНКА: заменяем NaN на 0.0
+            nan_mask = df[col].isna()
+            nan_count = nan_mask.sum()
 
-        # Определяем пустые значения
-        empty_mask = (
-            df[col].isna() |
-            (df[col].str.strip() == '') |
-            (df[col].str.strip() == 'nan') |
-            (df[col].str.strip() == 'None') |
-            (df[col].str.strip() == 'NaT')  # Для дат
-        )
-        empty_count = empty_mask.sum()
+            if nan_count > 0:
+                df.loc[nan_mask, col] = 0.0
+                columns_with_replacements.append(col)
+                print(f"  Колонка '{col}' (числовая): NaN - {nan_count}. Заполнено 0.0.")
+        else:
+            # НЕЧИСЛОВАЯ КОЛОНКА (object, datetime64, и др.):
+            # Здесь могут быть np.nan (float), None, пустые строки
 
-        if empty_count > 0:
-            df.loc[empty_mask, col] = '-'
-            columns_with_replacements.append(col)
-            print(f"  Колонка '{col}': ячейки без данных - {empty_count}. Заполнено '-'.")
-        # Не выводим сообщение для колонок без замен — уменьшаем шум
+            # Приводим к строковому типу для унификации
+            # np.nan → 'nan', None → 'None', NaT → 'NaT'
+            df[col] = df[col].astype(str)
+
+            # Ищем ячейки, которые нужно заполнить '-'
+            empty_mask = (
+                (df[col].str.strip() == '') |      # пустая строка
+                (df[col].str.strip() == 'nan') |   # бывший np.nan
+                (df[col].str.strip() == 'None') |  # бывший None
+                (df[col].str.strip() == 'NaT')     # бывший NaT (для дат)
+            )
+
+            empty_count = empty_mask.sum()
+
+            if empty_count > 0:
+                df.loc[empty_mask, col] = '-'
+                columns_with_replacements.append(col)
+                print(f"  Колонка '{col}' (нечисловая): пустых ячеек - {empty_count}. Заполнено '-'.")
 
     return columns_with_replacements
 
@@ -1702,7 +1711,7 @@ def process_single_bp(
         print_step_header(5, 5, "Заполнение пустых значений символом '-'")
 
         # Заполняем пустые значения во ВСЕХ колонках
-        columns_with_replacements = fill_empty_values_with_dash(df_current)
+        columns_with_replacements = fill_empty_values(df_current)
 
         if columns_with_replacements:
             print(f"\n  Колонок с пустыми значениями: {len(columns_with_replacements)}")
