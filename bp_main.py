@@ -492,7 +492,12 @@ def save_processed_dataframe(
             while True:
                 try:
                     proceed = input("  Продолжить объединение? (да/нет): ").strip().lower()
-                    break
+                    if proceed == 'да':
+                        break
+                    elif proceed == 'нет':
+                        break
+                    else:
+                        print("  Некорректный ввод. Пожалуйста, введите 'да' или 'нет'.")
                 except KeyboardInterrupt:
                     print()
                     while True:

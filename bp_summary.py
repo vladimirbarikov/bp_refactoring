@@ -1190,8 +1190,13 @@ def batch_file_loader_for_single_bp(
                     # Защищённый ввод для retry
                     while True:
                         try:
-                            retry = input("    Повторить? (Enter - да, 'no' - пропустить): ").strip().lower()
-                            break
+                            retry = input("    Повторить? (Enter - да, 'нет' - пропустить): ").strip().lower()
+                            if retry in ('', 'да'):
+                                break
+                            elif retry == 'нет':
+                                break
+                            else:
+                                print("    Некорректный ввод. Нажмите Enter чтобы повторить, или введите 'нет' чтобы пропустить.")
                         except KeyboardInterrupt:
                             print()
                             while True:
@@ -1210,7 +1215,7 @@ def batch_file_loader_for_single_bp(
                                     sys.exit(0)
                             continue
 
-                    if retry == 'no':
+                    if retry == 'нет':
                         print("    → Пропущено.")
                         break
                     # Если Enter или другое значение - продолжаем цикл (повторный ввод имени файла)
@@ -1283,8 +1288,13 @@ def batch_file_loader_for_single_bp(
                         # Защищённый ввод для retry
                         while True:
                             try:
-                                retry = input("    Повторить? (Enter - да, 'no' - пропустить): ").strip().lower()
-                                break
+                                retry = input("    Повторить? (Enter - да, 'нет' - пропустить): ").strip().lower()
+                                if retry in ('', 'да'):
+                                    break
+                                elif retry == 'нет':
+                                    break
+                                else:
+                                    print("    Некорректный ввод. Нажмите Enter чтобы повторить, или введите 'нет' чтобы пропустить.")
                             except KeyboardInterrupt:
                                 print()
                                 while True:
@@ -1303,7 +1313,7 @@ def batch_file_loader_for_single_bp(
                                         sys.exit(0)
                                 continue
 
-                        if retry == 'no':
+                        if retry == 'нет':
                             print("    → Пропущено.")
                             break
                         # Если Enter или другое значение - продолжаем цикл (повторный ввод имени файла)

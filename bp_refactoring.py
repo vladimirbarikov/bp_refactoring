@@ -2031,7 +2031,12 @@ def main():
         while True:
             try:
                 manual_input = input("\n  Хотите указать BP номера для обработки вручную? (да/нет): ").strip().lower()
-                break
+                if manual_input == 'да':
+                    break
+                elif manual_input == 'нет':
+                    break
+                else:
+                    print("  Некорректный ввод. Пожалуйста, введите 'да' или 'нет'.")
             except KeyboardInterrupt:
                 print()
                 while True:
@@ -2182,7 +2187,13 @@ def main():
         while True:
             try:
                 proceed = input("\n  Продолжить с имеющимися файлами? (да/нет): ").strip().lower()
-                break
+                if proceed == 'да':
+                    break
+                elif proceed == 'нет':
+                    print("  Программа завершена. Скачайте недостающие файлы и запустите снова.")
+                    sys.exit(0)
+                else:
+                    print("  Некорректный ввод. Пожалуйста, введите 'да' или 'нет'.")
             except KeyboardInterrupt:
                 print()
                 while True:
@@ -2195,9 +2206,6 @@ def main():
                         break
                     else:
                         print("Пожалуйста, введите 'да' или 'нет'")
-        if proceed != 'да':
-            print("  Программа завершена. Скачайте недостающие файлы и запустите снова.")
-            sys.exit(0)
 
     # Пауза после поиска всех BP файлов
     wait_for_user()
