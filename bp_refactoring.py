@@ -11,21 +11,20 @@ Breakpoint (BP). Он выполняет 18 последовательных ш�
     1. Загрузка BP файла
     2. Выбор нужных колонок
     3. Выбор статуса технического изменения
-    4. Заполнение пустых значений
-    5. Ввод количества деталей в SS
-    6. Перевод названий деталей
-    7. Поиск официальных названий поставщиков
-    8. Ввод статуса локализации поставщиков
-    9. Фильтрация китайских символов
-    10. Перевод описания к изменению
-    11. Перевод решения к изменению
-    12. Обработка цветов и Color Code
-    13. Обработка рабочих центров
-    14. Перевод требований по утилизации старых деталей
-    15. Перевод требований по взаимозаменяемости
-    16. Проверка наличия деталей в BOM
-    17. Упорядочивание колонок
-    18. Сохранение результата
+    4. Ввод количества деталей в SS
+    5. Перевод названий деталей
+    6. Поиск официальных названий поставщиков
+    7. Ввод статуса локализации поставщиков
+    8. Фильтрация китайских символов
+    9. Перевод описания к изменению
+    10. Перевод решения к изменению
+    11. Обработка цветов и Color Code
+    12. Обработка рабочих центров
+    13. Перевод требований по утилизации старых деталей
+    14. Перевод требований по взаимозаменяемости
+    15. Проверка наличия деталей в BOM
+    16. Упорядочивание колонок
+    17. Сохранение результата
 
 Каждый шаг включает:
     - Интерактивное взаимодействие с пользователем для ввода переводов
@@ -511,41 +510,6 @@ def extract_parentheses_content(text):
         return ' '.join(matches)
 
     return text_str
-
-
-def fill_empty_values_with_dash(df, columns):
-    """
-    Заполняет пустые значения в указанных колонках символом '-'.
-
-    Аргументы:
-        df (pd.DataFrame): DataFrame для обработки.
-        columns (list): Список названий колонок для обработки.
-
-    Возвращается:
-        list: Список колонок, в которых были выполнены замены.
-
-    Примечание:
-        Пустыми считаются значения: None, NaN, пустая строка, 'nan', 'None'.
-    """
-    columns_with_replacements = []
-
-    for col in columns:
-        if col in df.columns:
-            df[col] = df[col].astype(str)
-
-            empty_mask = df[col].isna() | (df[col].str.strip() == '') | (df[col].str.strip() == 'nan') | (df[col].str.strip() == 'None')
-            empty_count = empty_mask.sum()
-
-            if empty_count > 0:
-                print(f"  Колонка '{col}': ячейки без данных - {empty_count}. Заполнено '-'.")
-                df.loc[empty_mask, col] = '-'
-                columns_with_replacements.append(col)
-            else:
-                print(f"  Колонка '{col}': все данные заполнены. Сохранено без изменений.")
-        else:
-            print(f"  Колонка '{col}': отсутствует в данных.")
-
-    return columns_with_replacements
 
 
 def get_unique_non_empty_values(series, column_name):
@@ -1597,7 +1561,7 @@ def process_bp_file(bp_filename, df_bom):
 
     # Шаг 1: Загрузка BP файла
     while True:
-        print_step_header(1, 18, "Загрузка BP файла")
+        print_step_header(1, 17, "Загрузка BP файла")
         df_bp = load_excel_file(bp_filename, "BP файл")
         if df_bp is None:
             return None
@@ -1613,7 +1577,7 @@ def process_bp_file(bp_filename, df_bom):
 
     # Шаг 2: Выбор нужных колонок
     while True:
-        print_step_header(2, 18, "Выбор нужных колонок")
+        print_step_header(2, 17, "Выбор нужных колонок")
         bp_columns_to_keep = [
             'Change', 'BOM Product', 'Update Type', 'Part No.', 'Part Name(CHN)',
             'Quantity', 'Supplier Name', 'Change Description', 'Solution',
@@ -1646,7 +1610,7 @@ def process_bp_file(bp_filename, df_bom):
 
     # Шаг 3: Выбор статуса тех. изменения
     while True:
-        print_step_header(3, 18, "Выбор статуса тех. изменения")
+        print_step_header(3, 17, "Выбор статуса тех. изменения")
         if 'Status' not in df_bp_new.columns or df_bp_new['Status'].iloc[0] == '-':
             status = get_bp_status(bp_number)
             df_bp_new['Status'] = status
@@ -1662,41 +1626,9 @@ def process_bp_file(bp_filename, df_bom):
             break
         # retry - повторяем шаг 3
 
-    # Шаг 4: Заполнение пустых значений
+    # Шаг 4: Ввод количества деталей в SS
     while True:
-        print_step_header(4, 18, "Заполнение пустых значений")
-        columns_with_replacements = fill_empty_values_with_dash(df_bp_new, available_cols)
-
-        base_columns = ['BOM Product', 'Part No.', 'Part Name(CHN)']
-        preview_columns = []
-        for col in base_columns:
-            if col in df_bp_new.columns and col not in preview_columns:
-                preview_columns.append(col)
-        for col in columns_with_replacements:
-            if col in df_bp_new.columns and col not in preview_columns:
-                preview_columns.append(col)
-
-        if preview_columns:
-            show_dataframe_preview(
-                df_bp_new, "Заполнение пустых значений",
-                focus_columns=preview_columns
-            )
-        else:
-            show_dataframe_preview(
-                df_bp_new, "Заполнение пустых значений",
-                focus_columns=['BP_No', 'Status', 'Change','BOM Product', 'Part No.', 'Part Name(CHN)']
-            )
-
-        continue_flag, df_bp_new, saved_state = confirm_step(
-            "Заполнение пустых значений", df_bp_new, saved_state
-        )
-        if continue_flag:
-            break
-        # retry - повторяем шаг 4
-
-    # Шаг 5: Ввод количества деталей в SS
-    while True:
-        print_step_header(5, 18, "Ввод количества деталей в SS")
+        print_step_header(4, 17, "Ввод количества деталей в SS")
         quantity_dict = get_quantity_in_ss(df_bp_new, bp_number)
         df_bp_new['Quantity in SS'] = df_bp_new['Part No.'].map(quantity_dict).fillna(0).astype(int)
 
@@ -1710,11 +1642,11 @@ def process_bp_file(bp_filename, df_bom):
         )
         if continue_flag:
             break
-        # retry - повторяем шаг 5
+        # retry - повторяем шаг 4
 
-    # Шаг 6: Перевод названий деталей
+    # Шаг 5: Перевод названий деталей
     while True:
-        print_step_header(6, 18, "Перевод названий деталей")
+        print_step_header(5, 17, "Перевод названий деталей")
         if 'Part Name(CHN)' in df_bp_new.columns:
             unique_parts = get_unique_non_empty_values(df_bp_new['Part Name(CHN)'], 'Part Name(CHN)')
 
@@ -1736,11 +1668,11 @@ def process_bp_file(bp_filename, df_bom):
         )
         if continue_flag:
             break
-        # retry - повторяем шаг 6
+        # retry - повторяем шаг 5
 
-    # Шаг 7: Поиск официальных названий поставщиков
+    # Шаг 6: Поиск официальных названий поставщиков
     while True:
-        print_step_header(7, 18, "Поиск официальных названий поставщиков")
+        print_step_header(6, 17, "Поиск официальных названий поставщиков")
         if 'Supplier Name' in df_bp_new.columns:
             unique_suppliers = get_unique_non_empty_values(df_bp_new['Supplier Name'], 'Supplier Name')
 
@@ -1760,11 +1692,11 @@ def process_bp_file(bp_filename, df_bom):
         continue_flag, df_bp_new, saved_state = confirm_step("Поиск официальных названий поставщиков", df_bp_new, saved_state)
         if continue_flag:
             break
-        # retry - повторяем шаг 7
+        # retry - повторяем шаг 6
 
-    # Шаг 8: Ввод статуса локализации поставщиков
+    # Шаг 7: Ввод статуса локализации поставщиков
     while True:
-        print_step_header(8, 18, "Ввод статуса локализации поставщиков")
+        print_step_header(7, 17, "Ввод статуса локализации поставщиков")
         df_bp_new = get_supplier_localization_status(df_bp_new, bp_number)
         show_dataframe_preview(
             df_bp_new, "Ввод статуса локализации поставщиков",
@@ -1776,10 +1708,10 @@ def process_bp_file(bp_filename, df_bom):
         )
         if continue_flag:
             break
-        # retry - повторяем шаг 8
+        # retry - повторяем шаг 7
 
-    # Шаг 9: Фильтрация китайских символов
-    print_step_header(9, 18, "Фильтрация китайских символов")
+    # Шаг 8: Фильтрация китайских символов
+    print_step_header(8, 17, "Фильтрация китайских символов")
     if 'Change Description' in df_bp_new.columns:
         df_bp_new['Change Description'] = df_bp_new['Change Description'].apply(filter_chinese_lines)
         print("  Колонка 'Change Description': фильтрация выполнена")
@@ -1787,9 +1719,9 @@ def process_bp_file(bp_filename, df_bom):
         df_bp_new['Solution'] = df_bp_new['Solution'].apply(filter_chinese_lines)
         print("  Колонка 'Solution': фильтрация выполнена")
 
-    # Шаг 10: Перевод описания
+    # Шаг 9: Перевод описания
     while True:
-        print_step_header(10, 18, "Перевод описания к изменению")
+        print_step_header(9, 17, "Перевод описания к изменению")
         if 'Change Description' in df_bp_new.columns:
             unique_descs = get_unique_non_empty_values(df_bp_new['Change Description'], 'Change Description')
 
@@ -1809,11 +1741,11 @@ def process_bp_file(bp_filename, df_bom):
         continue_flag, df_bp_new, saved_state = confirm_step("Перевод описания изменений", df_bp_new, saved_state)
         if continue_flag:
             break
-        # retry - повторяем шаг 10
+        # retry - повторяем шаг 9
 
-    # Шаг 11: Перевод решения
+    # Шаг 10: Перевод решения
     while True:
-        print_step_header(11, 18, "Перевод решения к изменению")
+        print_step_header(10, 17, "Перевод решения к изменению")
         if 'Solution' in df_bp_new.columns:
             unique_sols = get_unique_non_empty_values(df_bp_new['Solution'], 'Solution')
 
@@ -1833,11 +1765,11 @@ def process_bp_file(bp_filename, df_bom):
         continue_flag, df_bp_new, saved_state = confirm_step("Перевод решения", df_bp_new, saved_state)
         if continue_flag:
             break
-        # retry - повторяем шаг 11
+        # retry - повторяем шаг 10
 
-    # Шаг 12: Обработка цветов и Color Code
+    # Шаг 11: Обработка цветов и Color Code
     while True:
-        print_step_header(12, 18, "Обработка цветов и Color Code")
+        print_step_header(11, 17, "Обработка цветов и Color Code")
 
         if 'Color Name' in df_bp_new.columns:
             unique_colors = get_unique_non_empty_values(df_bp_new['Color Name'], 'Color Name')
@@ -1875,11 +1807,11 @@ def process_bp_file(bp_filename, df_bom):
         continue_flag, df_bp_new, saved_state = confirm_step("Обработка цветов и Color Code", df_bp_new, saved_state)
         if continue_flag:
             break
-        # retry - повторяем шаг 12
+        # retry - повторяем шаг 11
 
-    # Шаг 13: Обработка рабочих центров
+    # Шаг 12: Обработка рабочих центров
     while True:
-        print_step_header(13, 18, "Обработка рабочих центров")
+        print_step_header(12, 17, "Обработка рабочих центров")
         if 'Workcenter Name' in df_bp_new.columns:
             df_bp_new['Workcenter Name'] = df_bp_new['Workcenter Name'].apply(extract_parentheses_content)
 
@@ -1898,11 +1830,11 @@ def process_bp_file(bp_filename, df_bom):
         continue_flag, df_bp_new, saved_state = confirm_step("Обработка рабочих центров", df_bp_new, saved_state)
         if continue_flag:
             break
-        # retry - повторяем шаг 13
+        # retry - повторяем шаг 12
 
-    # Шаг 14: Перевод требований по дальнешейму использованию или утилизации старых деталей
+    # Шаг 13: Перевод требований по дальнешейму использованию или утилизации старых деталей
     while True:
-        print_step_header(14, 18, "Перевод требований по утилизации старых деталей")
+        print_step_header(13, 17, "Перевод требований по утилизации старых деталей")
         df_bp_new = translate_production_part_disposal(df_bp_new, bp_number)
         show_dataframe_preview(
             df_bp_new, "Перевод требований по утилизации старых деталей",
@@ -1914,11 +1846,11 @@ def process_bp_file(bp_filename, df_bom):
         )
         if continue_flag:
             break
-        # retry - повторяем шаг 14
+        # retry - повторяем шаг 13
 
-    # Шаг 15: Перевод требований по взаимозаменяемости
+    # Шаг 14: Перевод требований по взаимозаменяемости
     while True:
-        print_step_header(15, 18, "Перевод требований по взаимозаменяемости")
+        print_step_header(14, 17, "Перевод требований по взаимозаменяемости")
         df_bp_new = translate_interchangeable(df_bp_new, bp_number)
         show_dataframe_preview(
             df_bp_new, "Перевод требований по взаимозаменяемости",
@@ -1930,11 +1862,11 @@ def process_bp_file(bp_filename, df_bom):
         )
         if continue_flag:
             break
-        # retry - повторяем шаг 15
+        # retry - повторяем шаг 14
 
-    # Шаг 16: Проверка наличия в BOM
+    # Шаг 15: Проверка наличия в BOM
     while True:
-        print_step_header(16, 18, "Проверка наличия деталей в BOM")
+        print_step_header(15, 17, "Проверка наличия деталей в BOM")
         if df_bom is not None and 'BOM Product' in df_bp_new.columns and 'Part No.' in df_bp_new.columns:
             try:
                 df_bp_new['Composite Key'] = df_bp_new['BOM Product'].astype(str) + '|' + df_bp_new['Part No.'].astype(str)
@@ -1962,11 +1894,11 @@ def process_bp_file(bp_filename, df_bom):
         continue_flag, df_bp_new, saved_state = confirm_step("Проверка наличия в BOM", df_bp_new, saved_state)
         if continue_flag:
             break
-        # retry - повторяем шаг 16
+        # retry - повторяем шаг 15
 
-    # Шаг 17: Упорядочивание колонок
+    # Шаг 16: Упорядочивание колонок
     while True:
-        print_step_header(17, 18, "Упорядочивание колонок")
+        print_step_header(16, 17, "Упорядочивание колонок")
         bp_columns_order = [
             'BP_No', 'Status', 'In Stock', 'New Part Available Date', 'BOM Product',
             'Change', 'Update Type', 'Is in BOM', 'Part No.', 'Part Name (RUS)', 'Quantity',
@@ -1991,10 +1923,10 @@ def process_bp_file(bp_filename, df_bom):
         continue_flag, df_bp_new, saved_state = confirm_step("Упорядочивание колонок", df_bp_new, saved_state)
         if continue_flag:
             break
-        # retry - повторяем шаг 17
+        # retry - повторяем шаг 16
 
-    # Шаг 18: Сохранение результата
-    print_step_header(18, 18, "Сохранение результата")
+    # Шаг 17: Сохранение результата
+    print_step_header(17, 17, "Сохранение результата")
 
     bp_dataframe = {
         'bp_number': bp_number,

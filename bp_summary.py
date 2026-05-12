@@ -201,6 +201,49 @@ def clean_dataframe_strings(df):
     return df_clean
 
 
+def fill_empty_values_with_dash(df) -> list:
+    """
+    Заполняет пустые значения во ВСЕХ колонках DataFrame символом '-'.
+    
+    Проверяет каждую колонку DataFrame и заменяет пустые значения
+    (None, NaN, пустая строка, 'nan', 'None') на символ '-'.
+
+    Аргументы:
+        df (pd.DataFrame): DataFrame для обработки.
+
+    Возвращается:
+        list: Список названий колонок, в которых были выполнены замены.
+
+    Примечание:
+        Пустыми считаются значения: None, NaN, пустая строка, 'nan', 'None'.
+        Числовые колонки с dtype int/float преобразуются в строковый тип
+        для унификации обработки.
+    """
+    columns_with_replacements = []
+
+    for col in df.columns:
+        # Приводим колонку к строковому типу для единообразия
+        df[col] = df[col].astype(str)
+
+        # Определяем пустые значения
+        empty_mask = (
+            df[col].isna() |
+            (df[col].str.strip() == '') |
+            (df[col].str.strip() == 'nan') |
+            (df[col].str.strip() == 'None') |
+            (df[col].str.strip() == 'NaT')  # Для дат
+        )
+        empty_count = empty_mask.sum()
+
+        if empty_count > 0:
+            df.loc[empty_mask, col] = '-'
+            columns_with_replacements.append(col)
+            print(f"  Колонка '{col}': ячейки без данных - {empty_count}. Заполнено '-'.")
+        # Не выводим сообщение для колонок без замен — уменьшаем шум
+
+    return columns_with_replacements
+
+
 def wait_for_user(prompt="\nНажмите Enter для продолжения..."):
     """
     Ожидает нажатия клавиши Enter от пользователя.
@@ -1578,7 +1621,7 @@ def process_single_bp(
 
     # Шаг 1: Поиск пар Before/After
     while True:
-        print_step_header(1, 4, "Поиск пар Before/After")
+        print_step_header(1, 5, "Поиск пар Before/After")
         pairs = find_pairs(df_bp)
         print(f"  Найдено пар/строк: {len(pairs)}")
 
@@ -1602,7 +1645,7 @@ def process_single_bp(
     # Шаг 2: Пользовательский ввод
     if interactive:
         while True:
-            print_step_header(2, 4, "Ввод данных Batch fact и Change Date")
+            print_step_header(2, 5, "Ввод данных Batch fact и Change Date")
             df_current = user_input_for_single_bp(df_current, bp_number)
             show_dataframe_preview(
                 df_current, "Ввод данных Batch fact и Change Date",
@@ -1615,7 +1658,7 @@ def process_single_bp(
 
     # Шаг 3: Поиск данных в конфигурационном файле
     while True:
-        print_step_header(3, 4, "Поиск данных в конфигурационном файле")
+        print_step_header(3, 5, "Поиск данных в конфигурационном файле")
         df_current = config_lookup_for_single_bp(df_current, df_config)
         show_dataframe_preview(
             df_current, "Поиск данных в конфигурационном файле",
@@ -1628,7 +1671,7 @@ def process_single_bp(
 
     # Шаг 4: Загрузка данных из упаковочного листа
     while True:
-        print_step_header(4, 4, "Загрузка данных из упаковочного листа")
+        print_step_header(4, 5, "Загрузка данных из упаковочного листа")
         df_current = batch_file_loader_for_single_bp(df_current)
         show_dataframe_preview(
             df_current, "Загрузка данных из упаковочного листа",
@@ -1644,8 +1687,36 @@ def process_single_bp(
         if continue_flag:
             break
 
-    print(f"\n  BP {bp_number} обработан. Добавлено строк: {len(df_current)}")
+    # Шаг 5: Заполнение пустых значений
+    while True:
+        print_step_header(5, 5, "Заполнение пустых значений символом '-'")
 
+        # Заполняем пустые значения во ВСЕХ колонках
+        columns_with_replacements = fill_empty_values_with_dash(df_current)
+
+        if columns_with_replacements:
+            print(f"\n  Колонок с пустыми значениями: {len(columns_with_replacements)}")
+            # Показываем только колонки, где были замены
+            show_dataframe_preview(
+                df_current,
+                "Заполнение пустых значений",
+                focus_columns=columns_with_replacements[:8],  # Первые 8 колонок с заменами
+                max_rows=5
+            )
+            if len(columns_with_replacements) > 8:
+                print(f"  ... и ещё {len(columns_with_replacements) - 8} колонок с заменами")
+        else:
+            print("  Все колонки уже заполнены данными.")
+            show_dataframe_preview(
+                df_current, "Заполнение пустых значений",
+                focus_columns=['BP_No', 'Part No. Before', 'Part No. After', 'Batch fact']
+            )
+
+        continue_flag, df_current, saved_state = confirm_step("Заполнение пустых значений", df_current, saved_state)
+        if continue_flag:
+            break
+
+    print(f"\n  BP {bp_number} обработан. Добавлено строк: {len(df_current)}")
     return df_current
 
 
@@ -1745,7 +1816,7 @@ def main(
 
     for col in column_order:
         if col not in df_summary.columns:
-            df_summary[col] = ''
+            df_summary[col] = '-'
 
     df_summary = df_summary[column_order]
 
