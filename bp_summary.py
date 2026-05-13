@@ -202,64 +202,62 @@ def clean_dataframe_strings(df):
     return df_clean
 
 
-def fill_empty_values(df) -> list:
+def fill_empty_values(df: pd.DataFrame) -> list:
     """
-    Заполняет пустые значения в колонках DataFrame:
-    - В числовых колонках (int64, float64): заменяет NaN на 0.0
-    - В нечисловых колонках (object, datetime): заменяет None, NaN, 
-      пустую строку, 'nan', 'None', 'NaT' на '-'
-
-    Аргументы:
-        df (pd.DataFrame): DataFrame для обработки.
-
-    Возвращается:
-        list: Список названий колонок, в которых были выполнены замены.
+    Заполняет пустые значения во всех колонках согласно заданным типам.
+    - Числовые колонки (известный список): NaN/Inf -> 0
+    - Колонки с датами -> строки ГГГГ-ММ-ДД, пустые -> '-'
+    - Остальные (строковые) колонки: пустые строки, 'nan', 'None', 'NaT' -> '-'
+    Возвращает список колонок, в которых были замены.
     """
+    # Явный список числовых колонок (на основе ваших спецификаций)
+    numeric_columns = [
+        'Quantity', 'Quantity in SS', 'Quantity per Vehicle Before',
+        'Quantity per Vehicle After', 'Quantity per Box Before',
+        'Quantity per Box After', 'Quantity batches in SS'
+    ]
+    # Колонки с датами (если встречаются)
+    datetime_columns = ['Change Date', 'New Part Available Date']
+
     columns_with_replacements = []
 
+    # 1. Обработка числовых колонок
+    for col in numeric_columns:
+        if col in df.columns:
+            # Преобразуем в числа (ошибки -> NaN)
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+            # Замена Inf на 0
+            if np.isinf(df[col]).any():
+                df[col] = df[col].replace([np.inf, -np.inf], 0)
+                columns_with_replacements.append(col)
+            # Замена NaN на 0
+            if df[col].isna().any():
+                df[col] = df[col].fillna(0)
+                columns_with_replacements.append(col)
+
+    # 2. Обработка datetime колонок
+    for col in datetime_columns:
+        if col in df.columns:
+            temp = pd.to_datetime(df[col], errors='coerce')
+            df[col] = temp.apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else '-')
+            columns_with_replacements.append(col)
+
+    # 3. Все остальные колонки (строковые)
     for col in df.columns:
-        # Определяем тип колонки
-        if pd.api.types.is_numeric_dtype(df[col]):
-            # ЧИСЛОВАЯ КОЛОНКА: заменяем NaN на 0.0
-            nan_mask = df[col].isna()
-            nan_count = nan_mask.sum()
-
-            if nan_count > 0:
-                df.loc[nan_mask, col] = 0.0
-                columns_with_replacements.append(col)
-                print(f"  Колонка '{col}' (числовая): NaN - {nan_count}. Заполнено 0.0.")
-
-            # Используем np.isinf для проверки на бесконечность
-            if hasattr(df[col], 'dtype') and np.issubdtype(df[col].dtype, np.number):
-                inf_mask = np.isinf(df[col])
-                inf_count = inf_mask.sum()
-                if inf_count > 0:
-                    df.loc[inf_mask, col] = 0.0
-                    columns_with_replacements.append(col)
-                    print(f"  Колонка '{col}' (числовая): Inf - {inf_count}. Заполнено 0.0.")
-
-        else:
-            # НЕЧИСЛОВАЯ КОЛОНКА (object, datetime64, и др.):
-            # Здесь могут быть np.nan (float), None, пустые строки
-
-            # Приводим к строковому типу для унификации
-            # np.nan → 'nan', None → 'None', NaT → 'NaT'
-            df[col] = df[col].astype(str)
-
-            # Ищем ячейки, которые нужно заполнить '-'
-            empty_mask = (
-                (df[col].str.strip() == '') |      # пустая строка
-                (df[col].str.strip() == 'nan') |   # бывший np.nan
-                (df[col].str.strip() == 'None') |  # бывший None
-                (df[col].str.strip() == 'NaT')     # бывший NaT (для дат)
-            )
-
-            empty_count = empty_mask.sum()
-
-            if empty_count > 0:
-                df.loc[empty_mask, col] = '-'
-                columns_with_replacements.append(col)
-                print(f"  Колонка '{col}' (нечисловая): пустых ячеек - {empty_count}. Заполнено '-'.")
+        if col in numeric_columns or col in datetime_columns:
+            continue
+        # Приводим к строке
+        series_str = df[col].astype(str)
+        empty_mask = (
+            (series_str.str.strip() == '') |
+            (series_str.str.strip() == 'nan') |
+            (series_str.str.strip() == 'None') |
+            (series_str.str.strip() == 'NaT')
+        )
+        if empty_mask.any():
+            series_str[empty_mask] = '-'
+            df[col] = series_str
+            columns_with_replacements.append(col)
 
     return columns_with_replacements
 
@@ -533,19 +531,8 @@ def show_dataframe_preview(
     ):
     """
     Отображает первые строки DataFrame для визуального контроля.
-
-    Особенности:
-        - Числовые поля отображаются как числа, 0.0 заменяется на '-'
-        - Длинные строки обрезаются до max_colwidth
-        - Автоматическая настройка ширины вывода
-
-    Аргументы:
-        df (pd.DataFrame): DataFrame для отображения.
-        step_name (str): Имя шага для вывода в заголовке.
-        max_rows (int): Максимальное количество строк для отображения. По умолчанию 5.
-        focus_columns (list, optional): Список колонок для отображения.
-                                        Если None, показываются первые 5 колонок.
-        max_colwidth (int): Максимальная ширина содержимого колонки в символах.
+    Пустые значения (NaN, None, NaT) показываются как пустая ячейка.
+    Числовые значения отображаются как есть (0 не заменяется).
     """
     if df is None or df.empty:
         print(f"\n[Preview после шага: {step_name}]")
@@ -567,26 +554,21 @@ def show_dataframe_preview(
         print("  Нет колонок для отображения!")
         return
 
-    # Создаем копию DataFrame для отображения
+    # Создаём копию для отображения (не изменяем исходный DataFrame)
     preview_df = df[display_cols].head(max_rows).copy()
 
-    # Обрабатываем каждую колонку в зависимости от типа данных
+    # Подготавливаем каждую колонку
     for col in preview_df.columns:
-        # Определяем тип данных в колонке
-        if pd.api.types.is_float_dtype(preview_df[col]) or pd.api.types.is_integer_dtype(preview_df[col]):
-            # Числовые поля: заменяем 0.0 и NaN на '-', остальные числа оставляем как есть
-            preview_df[col] = preview_df[col].fillna(0.0)
-            preview_df[col] = preview_df[col].apply(
-                lambda x: '-' if x == 0.0 else (str(x) if isinstance(x, (int, float)) else x)
-            )
-        else:
-            # Строковые поля: заполняем NaN и обрезаем длинные значения
-            preview_df[col] = preview_df[col].fillna('-').astype(str)
-            preview_df[col] = preview_df[col].apply(
-                lambda x: (x[:max_colwidth] + '…') if len(x) > max_colwidth else x
-            )
+        # Заменяем все варианты пустых значений на пустую строку
+        preview_df[col] = preview_df[col].apply(
+            lambda x: '' if pd.isna(x) else str(x)
+        )
+        # Обрезаем длинные строки
+        preview_df[col] = preview_df[col].apply(
+            lambda x: (x[:max_colwidth] + '…') if len(x) > max_colwidth else x
+        )
 
-    # Выводим с помощью pandas
+    # Выводим с помощью pandas, пустые строки отображаются как пустые ячейки
     with pd.option_context(
         'display.max_columns', len(display_cols),
         'display.width', None,
@@ -594,7 +576,7 @@ def show_dataframe_preview(
         'display.show_dimensions', False,
         'display.unicode.east_asian_width', True
     ):
-        print(preview_df.to_string(index=False))
+        print(preview_df.to_string(index=False, na_rep=''))
     print()
 
 
@@ -1721,7 +1703,7 @@ def process_single_bp(
 
     # Шаг 5: Заполнение пустых значений
     while True:
-        print_step_header(5, 5, "Заполнение пустых значений символом '-'")
+        print_step_header(5, 5, "Заполнение пустых значений")
 
         # Заполняем пустые значения во ВСЕХ колонках
         columns_with_replacements = fill_empty_values(df_current)

@@ -33,7 +33,7 @@ import sys
 import traceback
 import warnings
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 import pandas as pd
 import numpy as np
@@ -137,119 +137,83 @@ def find_latest_breakpoint_file(file_prefix: str = 'breakpoint_data') -> Optiona
 
 def normalize_breakpoint_data(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Нормализует DataFrame из файла breakpoint_data:
-    - Приводит колонки к правильным типам данных
-    - Заполняет пустые значения символом '-' (ВКЛЮЧАЯ колонки с датами)
-
-    Аргументы:
-        df (pd.DataFrame): DataFrame для нормализации.
-
-    Возвращается:
-        pd.DataFrame: Нормализованный DataFrame.
-
-    Примечание:
-        Функция создаёт копию DataFrame, не изменяя оригинал.
-        Все колонки приводятся к строковому типу для единообразия,
-        чтобы пустые значения можно было заменить на '-'.
+    Нормализует DataFrame:
+    - Числовые колонки (известный список) -> NaN/Inf заменяются на 0
+    - Колонки с датами -> строки ГГГГ-ММ-ДД, пустые -> '-'
+    - Все остальные колонки -> строки, пустые значения -> '-'
     """
     if df is None or df.empty:
         return df
 
-    df_normalized = df.copy()
-    columns_processed = []
-
-    # Определяем числовые колонки (они будут преобразованы в числа, затем в строки)
+    # Явный список числовых колонок (на основе ваших спецификаций)
     numeric_columns = [
         'Quantity', 'Quantity in SS', 'Quantity per Vehicle Before',
         'Quantity per Vehicle After', 'Quantity per Box Before',
-        'Quantity per Box After', 'Quantity batches in SS',
-        'Batches for old parts using out'
+        'Quantity per Box After', 'Quantity batches in SS'
     ]
+    # Batches for old parts using out – строковая, НЕ включаем в numeric_columns
 
-    # Колонки с датами (будут преобразованы в строки с заменой пустых на '-')
+    # Колонки с датами (если встречаются)
     datetime_columns = ['Change Date', 'New Part Available Date']
+
+    df_norm = df.copy()
 
     # 1. Обработка числовых колонок
     for col in numeric_columns:
-        if col in df_normalized.columns:
-            # Преобразуем в числовой тип (ошибки -> NaN)
-            df_normalized[col] = pd.to_numeric(df_normalized[col], errors='coerce')
+        if col in df_norm.columns:
+            # Преобразуем в числа (ошибки -> NaN)
+            df_norm[col] = pd.to_numeric(df_norm[col], errors='coerce')
             # Замена Inf на 0
-            if np.isinf(df_normalized[col]).any():
-                inf_count = np.isinf(df_normalized[col]).sum()
-                df_normalized[col] = df_normalized[col].replace([np.inf, -np.inf], 0)
-                print(f"  Колонка '{col}': {inf_count} значений Inf заменено на 0")
-            # Заполняем NaN нулями
-            nan_count = df_normalized[col].isna().sum()
-            if nan_count > 0:
-                df_normalized[col] = df_normalized[col].fillna(0)
-                print(f"  Колонка '{col}': {nan_count} пустых значений заменено на 0")
-            columns_processed.append(col)
+            if np.isinf(df_norm[col]).any():
+                df_norm[col] = df_norm[col].replace([np.inf, -np.inf], 0)
+            # Замена NaN на 0
+            if df_norm[col].isna().any():
+                df_norm[col] = df_norm[col].fillna(0)
 
-    # 2. Обработка колонок с датами (преобразуем в строки с '-')
+    # 2. Обработка datetime колонок
     for col in datetime_columns:
-        if col in df_normalized.columns:
-            # Сначала пробуем преобразовать в datetime для валидации
-            # Затем приводим к строковому формату
-            temp_series = pd.to_datetime(df_normalized[col], errors='coerce')
+        if col in df_norm.columns:
+            temp = pd.to_datetime(df_norm[col], errors='coerce')
+            df_norm[col] = temp.apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else '-')
 
-            # Форматируем даты в строку ГГГГ-ММ-ДД, а NaT заменяем на '-'
-            df_normalized[col] = temp_series.apply(
-                lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else '-'
-            )
+    # 3. Все остальные колонки (строковые)
+    for col in df_norm.columns:
+        if col in numeric_columns or col in datetime_columns:
+            continue
+        # Приводим к строке
+        df_norm[col] = df_norm[col].astype(str)
+        # Замена пустых вариантов на '-'
+        empty_mask = (
+            (df_norm[col].str.strip() == '') |
+            (df_norm[col].str.strip() == 'nan') |
+            (df_norm[col].str.strip() == 'None') |
+            (df_norm[col].str.strip() == 'NaT')
+        )
+        if empty_mask.any():
+            df_norm.loc[empty_mask, col] = '-'
 
-            # Считаем количество замен
-            empty_count = (df_normalized[col] == '-').sum()
-            if empty_count > 0:
-                print(f"  Колонка '{col}': {empty_count} пустых значений заменено на '-'")
-
-            columns_processed.append(col)
-
-    # 3. Обработка всех остальных колонок (строковые)
-    for col in df_normalized.columns:
-        if col not in columns_processed:
-            # Приводим к строковому типу
-            df_normalized[col] = df_normalized[col].astype(str)
-
-            # Заменяем пустые значения и 'nan' на '-'
-            empty_mask = (
-                (df_normalized[col].str.strip() == '') |
-                (df_normalized[col].str.strip() == 'nan') |
-                (df_normalized[col].str.strip() == 'None') |
-                (df_normalized[col].str.strip() == 'NaT')
-            )
-            empty_count = empty_mask.sum()
-
-            if empty_count > 0:
-                df_normalized.loc[empty_mask, col] = '-'
-                print(f"  Колонка '{col}': {empty_count} пустых значений заменено на '-'")
-
-            columns_processed.append(col)
-
-    print(f"\n  Нормализация завершена. Обработано колонок: {len(columns_processed)}")
-    return df_normalized
+    return df_norm
 
 
 def load_breakpoint_data(file_prefix: str = 'breakpoint_data') -> Optional[pd.DataFrame]:
     """
     Загружает самый свежий файл breakpoint_data с датой в имени.
 
-    Функция автоматически находит последний сохранённый файл с историей
-    и загружает его как DataFrame. Заголовки ожидаются в 3-й строке файла.
+    Ожидаемая структура файла:
+        - строка 0: объединённая ячейка "ДЛЯ КЛАДОВЩИКОВ"
+        - строка 1: английские заголовки колонок
+        - строка 2: русские переводы заголовков
+        - строки 3+: данные
+
+    При загрузке используем английские заголовки как имена колонок (header=1),
+    а строку с русскими переводами удаляем из данных.
 
     Аргументы:
         file_prefix (str): Префикс имени файла для поиска.
-                           По умолчанию 'breakpoint_data'.
 
     Возвращается:
-        Optional[pd.DataFrame]: DataFrame с данными из файла или None,
-                                если файлы не найдены или произошла ошибка загрузки.
-
-    Примечание:
-        При ошибке загрузки выводится сообщение и возвращается None,
-        что сигнализирует о необходимости создания нового файла.
+        Optional[pd.DataFrame]: DataFrame с данными или None.
     """
-
     latest_file = find_latest_breakpoint_file(file_prefix)
 
     if latest_file is None:
@@ -258,12 +222,22 @@ def load_breakpoint_data(file_prefix: str = 'breakpoint_data') -> Optional[pd.Da
         return None
 
     try:
-        # Загружаем с указанием строки заголовка (3-я строка = header=2)
-        df = pd.read_excel(latest_file, sheet_name='pivot', header=2)
+        # Загружаем, используя вторую строку (индекс 1) как заголовки (английские)
+        df = pd.read_excel(latest_file, sheet_name='pivot', header=1)
         print(f"  Файл '{latest_file}' загружен успешно")
-        print(f"  В нём уже {len(df)} строк")
 
-        # приводим данные к требуемым типам
+        # В загруженном DataFrame первая строка данных (индекс 0) — это русские переводы.
+        # Удаляем её, так как она не является реальными данными.
+        if not df.empty:
+            df = df.iloc[1:].reset_index(drop=True)
+            print("  Строка с русскими переводами заголовков удалена из данных")
+        else:
+            print("  Внимание: Файл не содержит данных после заголовков")
+            return None
+
+        print(f"  Загружено {len(df)} строк данных")
+
+        # Приводим данные к требуемым типам
         print("\n  Выполняется нормализация данных...")
         df = normalize_breakpoint_data(df)
 
@@ -299,7 +273,6 @@ def load_breakpoint_data(file_prefix: str = 'breakpoint_data') -> Optional[pd.Da
         print("  Будет создан новый файл")
         return None
     except Exception as e:
-        # Непредвиденная ошибка
         print(f"  НЕПРЕДВИДЕННАЯ ОШИБКА при загрузке файла '{latest_file}': {e}")
         print(f"  Тип ошибки: {type(e).__name__}")
         print("  Будет создан новый файл")
@@ -309,229 +282,152 @@ def load_breakpoint_data(file_prefix: str = 'breakpoint_data') -> Optional[pd.Da
 def save_excel_with_formatting(
         df_new_data: pd.DataFrame,
         output_filename: str,
-        sheet_name: str = 'pivot'
+        sheet_name: str = 'pivot',
+        russian_headers: Optional[List[str]] = None
     ) -> bool:
     """
-    Сохраняет DataFrame в Excel с форматированием (цвета, ширина колонок) с помощью xlsxwriter
+    Сохраняет DataFrame в Excel с форматированием и тремя строками заголовков.
 
-    Функция применяет сложное форматирование к выходному Excel файлу:
-        - Объединение ячеек для заголовков "ДЛЯ КЛАДОВЩИКОВ"
-        - Цветовая схема для различных групп колонок (HEX 0F243E, FDE9D9, белый)
-        - Настройка ширины колонок согласно спецификации
-        - Перенос текста для колонок с длинным содержимым
-
-    Требования к форматированию:
-        - Шрифт: Arial, размер 10, чёрный (для всех ячеек)
-        - 1-я строка: объединение колонок E-P с текстом "ДЛЯ КЛАДОВЩИКОВ", выравнивание по центру
-        - 1-я строка: объединение колонок AC-AD с текстом "ДЛЯ КЛАДОВЩИКОВ", выравнивание по центру
-        - 2-я и 3-я строка (заголовки), колонки с A по AM: шрифт белый, полужирный, Arial 10, заливка HEX 0F243E
-        - Колонки с E по P: заливка HEX FDE9D9
-        - Колонки AC и AD: заливка HEX FDE9D9
-        - Остальные колонки: белая заливка
-        - Колонки AI-AJ, AM: обязательный перенос по словам
-
-    Ширина колонок:
-        - A-H, J-O, AF, AH, AK-AL: 25
-        - I, P, AE, AG: 80
-        - Q, S, U-AB: 30
-        - R, T, AC-AD: 50
-        - AI-AJ, AM: 100 (с переносом слов)
+    Структура выходного файла:
+        - Строка 0: объединённые ячейки "ДЛЯ КЛАДОВЩИКОВ" (стиль merged_cell_format)
+        - Строка 1: английские имена колонок (из df_new_data.columns) со стилем header_format
+        - Строка 2: русские переводы заголовков (если переданы) со стилем header_format
+        - Строка 3 и далее: строки данных с форматированием в зависимости от колонки
 
     Аргументы:
-        df_new_data (pd.DataFrame): DataFrame с данными для сохранения
+        df_new_data (pd.DataFrame): DataFrame с данными (без строк заголовков)
         output_filename (str): Имя выходного файла
         sheet_name (str): Имя листа в Excel. По умолчанию 'pivot'
+        russian_headers (Optional[List[str]]): Список русских переводов для второй строки.
+            Должен соответствовать длине df_new_data.columns. Если None, вторая строка
+            остаётся пустой.
 
     Возвращается:
         bool: True если сохранение успешно, False при ошибке
-
-    Примечания:
-        - Требуется установленный пакет xlsxwriter
-        - При отсутствии xlsxwriter выполняется сохранение без форматирования
-        - При PermissionError или других ошибках выполняется fallback сохранение
     """
+    # Защита от любых NaN/Inf (на всякий случай)
+    df_new_data = df_new_data.replace([np.nan, np.inf, -np.inf], 0)
+
     try:
         with pd.ExcelWriter(output_filename, engine='xlsxwriter') as writer:
-            df_new_data.to_excel(writer, sheet_name=sheet_name, index=False)
-
             workbook = writer.book
-            worksheet = writer.sheets[sheet_name]
+            worksheet = workbook.add_worksheet(sheet_name)
 
-            # Формат для объединённых ячеек (1-я строка) - белый шрифт, полужирный, заливка 0F243E
+            # Определяем форматы (без изменений)
             merged_cell_format = workbook.add_format({
-                'font_name': 'Arial',
-                'font_size': 10,
-                'bold': True,
-                'font_color': 'white',
-                'bg_color': '#0F243E',
-                'valign': 'vcenter',
-                'align': 'center',
-                'text_wrap': True,
-                'border': 1
+                'font_name': 'Arial', 'font_size': 10, 'bold': True,
+                'font_color': 'white', 'bg_color': '#0F243E',
+                'valign': 'vcenter', 'align': 'center', 'text_wrap': True, 'border': 1
             })
 
-            # Основной формат для данных (Arial, 10, чёрный, белый фон)
-            data_format = workbook.add_format({
-                'font_name': 'Arial',
-                'font_size': 10,
-                'font_color': 'black',
-                'bg_color': '#FFFFFF',
-                'valign': 'top',
-            })
-
-            # Формат для заголовков (2-я и 3-я строка) - белый шрифт, полужирный, заливка 0F243E
             header_format = workbook.add_format({
-                'font_name': 'Arial',
-                'font_size': 10,
-                'bold': True,
-                'font_color': 'white',
-                'bg_color': '#0F243E',
-                'valign': 'center',
-                'align': 'center',
-                'text_wrap': True,
-                'border': 1
+                'font_name': 'Arial', 'font_size': 10, 'bold': True,
+                'font_color': 'white', 'bg_color': '#0F243E',
+                'valign': 'center', 'align': 'center', 'text_wrap': True, 'border': 1
             })
 
-            # Формат для колонок E-P (индексы 4-15) - заливка FDE9D9
+            data_format = workbook.add_format({
+                'font_name': 'Arial', 'font_size': 10, 'font_color': 'black',
+                'bg_color': '#FFFFFF', 'valign': 'top'
+            })
+
             columns_e_p_format = workbook.add_format({
-                'font_name': 'Arial',
-                'font_size': 10,
-                'font_color': 'black',
-                'bg_color': '#FDE9D9',
-                'valign': 'top',
+                'font_name': 'Arial', 'font_size': 10, 'font_color': 'black',
+                'bg_color': '#FDE9D9', 'valign': 'top'
             })
 
-            # Формат для колонок AC-AD (индексы 28-29) - заливка FDE9D9
             columns_ac_ad_format = workbook.add_format({
-                'font_name': 'Arial',
-                'font_size': 10,
-                'font_color': 'black',
-                'bg_color': '#FDE9D9',
-                'valign': 'top',
+                'font_name': 'Arial', 'font_size': 10, 'font_color': 'black',
+                'bg_color': '#FDE9D9', 'valign': 'top'
             })
 
-            # Формат для длинного текста с переносом (обычные колонки)
             wrap_format = workbook.add_format({
-                'font_name': 'Arial',
-                'font_size': 10,
-                'font_color': 'black',
-                'bg_color': '#FFFFFF',
-                'text_wrap': True,
-                'valign': 'top',
+                'font_name': 'Arial', 'font_size': 10, 'font_color': 'black',
+                'bg_color': '#FFFFFF', 'text_wrap': True, 'valign': 'top'
             })
 
-            # Формат для длинного текста в колонках E-P
             wrap_e_p_format = workbook.add_format({
-                'font_name': 'Arial',
-                'font_size': 10,
-                'font_color': 'black',
-                'bg_color': '#FDE9D9',
-                'text_wrap': True,
-                'valign': 'top',
+                'font_name': 'Arial', 'font_size': 10, 'font_color': 'black',
+                'bg_color': '#FDE9D9', 'text_wrap': True, 'valign': 'top'
             })
 
-            # Формат для длинного текста в колонках AC-AD
             wrap_ac_ad_format = workbook.add_format({
-                'font_name': 'Arial',
-                'font_size': 10,
-                'font_color': 'black',
-                'bg_color': '#FDE9D9',
-                'text_wrap': True,
-                'valign': 'top',
+                'font_name': 'Arial', 'font_size': 10, 'font_color': 'black',
+                'bg_color': '#FDE9D9', 'text_wrap': True, 'valign': 'top'
             })
 
-            # Формат для колонок AI-AJ, AM - ОБЯЗАТЕЛЬНЫЙ ПЕРЕНОС, белая заливка
             columns_wrap_format = workbook.add_format({
-                'font_name': 'Arial',
-                'font_size': 10,
-                'font_color': 'black',
-                'bg_color': '#FFFFFF',
-                'text_wrap': True,
-                'valign': 'top',
+                'font_name': 'Arial', 'font_size': 10, 'font_color': 'black',
+                'bg_color': '#FFFFFF', 'text_wrap': True, 'valign': 'top'
             })
 
-            # === КОНФИГУРАЦИЯ ШИРИНЫ КОЛОНОК ===
+            # Ширина колонок
             column_widths = {
-                0: 25, 1: 25, 2: 25, 3: 25, 4: 25, 5: 25, 6: 25, 7: 25,          # A-H: 25 (индексы 0-7)
-                8: 80,                                                           # I: 80 (индекс 8)
-                9: 25, 10: 25, 11: 25, 12: 25, 13: 25, 14: 25,                   # J-O: 25 (индексы 9-14)
-                15: 80,                                                          # P: 80 (индекс 15)
-                16: 30,                                                          # Q: 30 (индекс 16)
-                17: 50,                                                          # R: 50 (индекс 17)
-                18: 30,                                                          # S: 30 (индекс 18)
-                19: 50,                                                          # T: 50 (индекс 19)
-                20: 30, 21: 30, 22: 30, 23: 30, 24: 30, 25: 30, 26: 30, 27: 30,  # U-AB: 30 (индексы 20-27)
-                28: 50, 29: 50,                                                  # AC-AD: 50 (индексы 28-29)
-                30: 80,                                                          # AE: 80 (индекс 30)
-                31: 25,                                                          # AF: 25 (индекс 31)
-                32: 80,                                                          # AG: 80 (индекс 32)
-                33: 25,                                                          # AH: 25 (индекс 33)
-                34: 100, 35: 100,                                                # AI-AJ: 100 (индексы 34-35) - с переносом слов
-                36: 25, 37: 25,                                                  # AK-AL: 25 (индексы 36-37)
-                38: 100,                                                         # AM: 100 (индекс 38) - с переносом слов
+                0: 25, 1: 25, 2: 25, 3: 25, 4: 25, 5: 25, 6: 25, 7: 25,
+                8: 80, 9: 25, 10: 25, 11: 25, 12: 25, 13: 25, 14: 25,
+                15: 80, 16: 30, 17: 50, 18: 30, 19: 50,
+                20: 30, 21: 30, 22: 30, 23: 30, 24: 30, 25: 30, 26: 30, 27: 30,
+                28: 50, 29: 50, 30: 80, 31: 25, 32: 80, 33: 25,
+                34: 100, 35: 100, 36: 25, 37: 25, 38: 100,
             }
-
-            # Устанавливаем ширину колонок
             for col_num, width in column_widths.items():
                 if col_num < len(df_new_data.columns):
                     worksheet.set_column(col_num, col_num, width)
 
-            # Определяем индексы колонок со специальной заливкой
-            columns_e_p_indices = list(range(4, 16))      # колонки E-P (индексы 4-15)
-            columns_ac_ad_indices = [28, 29]              # колонки AC, AD (индексы 28-29)
-            columns_wrap_indices = [34, 35, 38]           # колонки AI, AJ, AM (индексы 34, 35, 38) - обязательный перенос
+            columns_e_p_indices = list(range(4, 16))
+            columns_ac_ad_indices = [28, 29]
+            columns_wrap_indices = [34, 35, 38]
 
-            # === 1-я строка: объединение ячеек ===
+            # === СТРОКА 0: объединённые ячейки ===
             if len(df_new_data.columns) > 15:
                 worksheet.merge_range(0, 4, 0, 15, "ДЛЯ КЛАДОВЩИКОВ", merged_cell_format)
-
             if len(df_new_data.columns) > 29:
                 worksheet.merge_range(0, 28, 0, 29, "ДЛЯ КЛАДОВЩИКОВ", merged_cell_format)
-
-            # Заполняем остальные колонки 1-й строки
+            # Остальные ячейки строки 0 оставляем пустыми (стиль merged_cell_format)
             for col_num in range(len(df_new_data.columns)):
                 if col_num in range(4, 16) or col_num in [28, 29]:
                     continue
                 worksheet.write(0, col_num, '', merged_cell_format)
 
-            # === 2-я и 3-я строка: заголовки ===
-            for col_num in range(min(len(df_new_data.columns), 39)):
-                col_name = df_new_data.columns[col_num] if col_num < len(df_new_data.columns) else ''
-                worksheet.write(1, col_num, col_name, header_format)
+            # === СТРОКА 1: английские заголовки ===
+            for col_num, header in enumerate(df_new_data.columns):
+                worksheet.write(1, col_num, header, header_format)
 
-                if len(df_new_data) >= 1:
-                    value = df_new_data.iloc[0, col_num] if col_num < len(df_new_data.columns) else ''
-                    worksheet.write(2, col_num, value, header_format)
+            # === СТРОКА 2: русские заголовки ===
+            if russian_headers is not None and len(russian_headers) == len(df_new_data.columns):
+                for col_num, rus_header in enumerate(russian_headers):
+                    worksheet.write(2, col_num, rus_header, header_format)
+            else:
+                # Если русские заголовки не переданы, оставляем строку пустой
+                for col_num in range(len(df_new_data.columns)):
+                    worksheet.write(2, col_num, '', header_format)
 
-            # === Строки данных ===
+            # === ДАННЫЕ (начиная со строки 3) ===
             for row_num in range(len(df_new_data)):
                 for col_num in range(len(df_new_data.columns)):
                     value = df_new_data.iloc[row_num, col_num]
                     is_long_text = isinstance(value, str) and len(value) > 50
+                    excel_row = row_num + 3  # Данные начинаются с 3-й строки Excel
 
                     if col_num in columns_wrap_indices:
-                        # Колонки AI, AJ, AM - обязательный перенос, белая заливка
-                        worksheet.write(row_num + 3, col_num, value, columns_wrap_format)
+                        worksheet.write(excel_row, col_num, value, columns_wrap_format)
                     elif col_num in columns_e_p_indices:
-                        # Колонки E-P - заливка FDE9D9
                         if is_long_text:
-                            worksheet.write(row_num + 3, col_num, value, wrap_e_p_format)
+                            worksheet.write(excel_row, col_num, value, wrap_e_p_format)
                         else:
-                            worksheet.write(row_num + 3, col_num, value, columns_e_p_format)
+                            worksheet.write(excel_row, col_num, value, columns_e_p_format)
                     elif col_num in columns_ac_ad_indices:
-                        # Колонки AC-AD - заливка FDE9D9
                         if is_long_text:
-                            worksheet.write(row_num + 3, col_num, value, wrap_ac_ad_format)
+                            worksheet.write(excel_row, col_num, value, wrap_ac_ad_format)
                         else:
-                            worksheet.write(row_num + 3, col_num, value, columns_ac_ad_format)
+                            worksheet.write(excel_row, col_num, value, columns_ac_ad_format)
                     else:
-                        # Остальные колонки - белая заливка
                         if is_long_text:
-                            worksheet.write(row_num + 3, col_num, value, wrap_format)
+                            worksheet.write(excel_row, col_num, value, wrap_format)
                         else:
-                            worksheet.write(row_num + 3, col_num, value, data_format)
+                            worksheet.write(excel_row, col_num, value, data_format)
 
-        print(f"  Файл '{output_filename}' сохранён с форматированием")
+        print(f"  Файл '{output_filename}' сохранён с форматированием (три строки заголовков)")
         return True
 
     except ImportError as e:
@@ -558,26 +454,14 @@ def save_processed_dataframe(
     """
     Сохраняет обработанный DataFrame с объединением с существующими данными.
 
-    Функция выполняет:
-        1. Загрузку самого свежего существующего файла (если есть)
-        2. Объединение существующих и новых данных
-        3. Сохранение объединённого DataFrame в файл с датой в имени
-
-    Все файлы сохраняются с префиксом ГГГГ-ММ-ДД_ для обеспечения истории.
-    При следующем запуске автоматически загружается самый свежий файл.
-
     Аргументы:
-        df_new_data (pd.DataFrame): Новый DataFrame для сохранения.
-        file_prefix (str): Префикс имени файла. По умолчанию 'breakpoint_data'.
+        df_new_data (pd.DataFrame): Новый DataFrame для сохранения (только данные, без строки переводов).
+        file_prefix (str): Префикс имени файла.
 
     Возвращается:
-        Optional[str]: Имя сохранённого файла или None при ошибке сохранения.
-
-    Примечания:
-        - При несовпадении структуры колонок запрашивается подтверждение у пользователя
-        - Объединение выполняется через pd.concat с ignore_index=True
+        Optional[str]: Имя сохранённого файла или None при ошибке.
     """
-    # Список русских переводов колонок (порядок соответствует column_order)
+    # Список русских переводов колонок (должен соответствовать порядку колонок в df_new_data)
     column_translation = [
         'Номер переключения', 'Статус переключения', 'Партия по плану', 'Дата выхода новой детали',
         'Партия по факту', 'Дата переключения', 'Модель', 'Номер "старой" детали до переключения',
@@ -608,29 +492,22 @@ def save_processed_dataframe(
         'Название цвета', 'Комментарии',
     ]
 
-    # Загружаем самый свежий существующий файл (если есть)
+    # Загружаем существующий файл
     df_existing = load_breakpoint_data(file_prefix)
 
     # Объединяем данные
     if df_existing is not None and not df_existing.empty:
         print(f"  Объединение: {len(df_existing)} существующих строк + {len(df_new_data)} новых строк")
 
-        # Проверяем, что колонки совпадают
+        # Проверяем совпадение колонок
         if list(df_existing.columns) != list(df_new_data.columns):
             print("  ВНИМАНИЕ: Структура колонок не совпадает!")
-            print(f"    Существующие колонки: {list(df_existing.columns)}")
-            print(f"    Новые колонки: {list(df_new_data.columns)}")
-
-            # Защищённый ввод для подтверждения объединения
             while True:
                 try:
                     proceed = input("  Продолжить объединение? (да/нет): ").strip().lower()
-                    if proceed == 'да':
+                    if proceed in ('да', 'нет'):
                         break
-                    elif proceed == 'нет':
-                        break
-                    else:
-                        print("  Некорректный ввод. Пожалуйста, введите 'да' или 'нет'.")
+                    print("  Некорректный ввод. Пожалуйста, введите 'да' или 'нет'.")
                 except KeyboardInterrupt:
                     print()
                     while True:
@@ -653,31 +530,24 @@ def save_processed_dataframe(
                 print("  Объединение отменено. Новые данные будут сохранены в отдельный файл.")
                 current_date = datetime.now().strftime('%Y-%m-%d')
                 filename = f"{current_date}_{file_prefix}_new.xlsx"
-                # Вставляем строку с русскими переводами после заголовков
-                russian_row = pd.DataFrame([column_translation], columns=df_new_data.columns)
-                df_new_data = pd.concat([df_new_data.iloc[:1], russian_row, df_new_data.iloc[1:]], ignore_index=True)
-                success = save_excel_with_formatting(df_new_data, filename)
+                success = save_excel_with_formatting(df_new_data, filename, russian_headers=column_translation)
                 return filename if success else None
 
-        # Объединяем DataFrame
         df_combined = pd.concat([df_existing, df_new_data], ignore_index=True)
         print(f"  Итого строк после объединения: {len(df_combined)}")
+
     else:
         df_combined = df_new_data
         print(f"  Создаётся новый файл с {len(df_combined)} строками")
 
-    # Вставляем строку с русскими переводами на позицию 2 (индекс 1)
-    russian_row = pd.DataFrame([column_translation], columns=df_combined.columns)
-    df_combined = pd.concat([df_combined.iloc[:1], russian_row, df_combined.iloc[1:]], ignore_index=True)
-    print("  Добавлена строка с русскими переводами колонок")
+    # Нормализуем объединенные даные
+    print("\n  Выполняется нормализация объединённых данных...")
+    df_combined = normalize_breakpoint_data(df_combined)
 
-    # Получаем текущую дату
     current_date = datetime.now().strftime('%Y-%m-%d')
-
-    # Сохраняем файл с датой
     filename = f"{current_date}_{file_prefix}.xlsx"
     print(f"\n  Сохранение файла: {filename}")
-    success = save_excel_with_formatting(df_combined, filename)
+    success = save_excel_with_formatting(df_combined, filename, russian_headers=column_translation)
 
     if success:
         print(f"\n  Файл успешно сохранён: {filename}")

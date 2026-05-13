@@ -402,15 +402,7 @@ def load_excel_file(filename, description="файл"):
 def show_dataframe_preview(df, step_name, max_rows=10, focus_columns=None, max_colwidth=40):
     """
     Отображает первые строки DataFrame для визуального контроля результатов шага.
-
-    Аргументы:
-        df (pd.DataFrame): DataFrame для отображения.
-        step_name (str): Имя шага для вывода в заголовке.
-        max_rows (int): Максимальное количество строк для отображения. По умолчанию 5.
-        focus_columns (list, optional): Список колонок для отображения.
-                                        Если None, показываются первые 5 колонок.
-        max_colwidth (int): Максимальная ширина содержимого колонки в символах.
-                            По умолчанию 40.
+    Пустые значения (NaN, None) показываются как пустая ячейка.
     """
     if df is None or df.empty:
         print(f"\n[Preview после шага: {step_name}]")
@@ -435,14 +427,18 @@ def show_dataframe_preview(df, step_name, max_rows=10, focus_columns=None, max_c
     # Создаем копию DataFrame для отображения
     preview_df = df[display_cols].head(max_rows).copy()
 
-    # Обрезаем длинные текстовые значения
+    # Подготавливаем каждую колонку
     for col in preview_df.columns:
-        preview_df[col] = preview_df[col].fillna('-').astype(str)
+        # Заменяем пустые значения на пустую строку
+        preview_df[col] = preview_df[col].apply(
+            lambda x: '' if pd.isna(x) else str(x)
+        )
+        # Обрезаем длинные строки
         preview_df[col] = preview_df[col].apply(
             lambda x: (x[:max_colwidth] + '…') if len(x) > max_colwidth else x
         )
 
-    # Выводим с помощью pandas
+    # Выводим с помощью pandas, пустые строки отображаются как пустые ячейки
     with pd.option_context(
         'display.max_columns', len(display_cols),
         'display.width', None,
@@ -450,7 +446,7 @@ def show_dataframe_preview(df, step_name, max_rows=10, focus_columns=None, max_c
         'display.show_dimensions', False,
         'display.unicode.east_asian_width', True
     ):
-        print(preview_df.to_string(index=False))
+        print(preview_df.to_string(index=False, na_rep=''))
     print()
 
 
@@ -679,11 +675,20 @@ def load_latest_breakpoint_data(file_prefix: str = 'breakpoint_data') -> Optiona
     """
     Загружает самый свежий файл breakpoint_data с датой в имени.
 
+    Ожидаемая структура файла:
+        - строка 0: объединённая ячейка "ДЛЯ КЛАДОВЩИКОВ"
+        - строка 1: английские заголовки колонок
+        - строка 2: русские переводы заголовков
+        - строки 3+: данные
+
+    При загрузке используем английские заголовки как имена колонок (header=1),
+    а строку с русскими переводами удаляем из данных.
+
     Аргументы:
         file_prefix (str): Префикс имени файла для поиска.
 
     Возвращается:
-        Optional[pd.DataFrame]: DataFrame с данными или None, если файлы не найдены.
+        Optional[pd.DataFrame]: DataFrame с данными или None.
     """
     latest_file = find_latest_breakpoint_file(file_prefix)
 
@@ -692,12 +697,23 @@ def load_latest_breakpoint_data(file_prefix: str = 'breakpoint_data') -> Optiona
         return None
 
     try:
-        # Загружаем с указанием строки заголовка (3-я строка = header=2)
-        df = pd.read_excel(latest_file, header=2)
+        # Загружаем, используя вторую строку (индекс 1) как заголовки (английские)
+        df = pd.read_excel(latest_file, sheet_name='pivot', header=1)
         print(f"  Файл: {latest_file} загружен успешно!")
+
+        # В загруженном DataFrame первая строка данных (индекс 0) — это русские переводы.
+        # Удаляем её, так как она не является реальными данными.
+        if not df.empty:
+            df = df.iloc[1:].reset_index(drop=True)
+            print("  Строка с русскими переводами заголовков удалена из данных")
+        else:
+            print("  Внимание: Файл не содержит данных после заголовков")
+            return None
+
         print(f"  Размер: {df.shape[0]} строк × {df.shape[1]} колонок")
         df = clean_dataframe_strings(df)  # Очистка данных от проблемных символов
         return df
+
     except FileNotFoundError:
         print(f"  Ошибка: Файл '{latest_file}' не найден")
         return None
@@ -719,7 +735,6 @@ def load_latest_breakpoint_data(file_prefix: str = 'breakpoint_data') -> Optiona
             print(f"  Ошибка при загрузке файла '{latest_file}': {e}")
         return None
     except Exception as e:
-        # Непредвиденная ошибка
         print(f"  НЕПРЕДВИДЕННАЯ ОШИБКА при загрузке файла '{latest_file}': {e}")
         print(f"  Тип ошибки: {type(e).__name__}")
         return None
