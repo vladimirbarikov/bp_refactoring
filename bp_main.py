@@ -36,6 +36,7 @@ from datetime import datetime
 from typing import Optional
 
 import pandas as pd
+import numpy as np
 from pandas.errors import EmptyDataError, ParserError
 from openpyxl.utils.exceptions import InvalidFileException
 
@@ -173,6 +174,11 @@ def normalize_breakpoint_data(df: pd.DataFrame) -> pd.DataFrame:
         if col in df_normalized.columns:
             # Преобразуем в числовой тип (ошибки -> NaN)
             df_normalized[col] = pd.to_numeric(df_normalized[col], errors='coerce')
+            # Замена Inf на 0
+            if np.isinf(df_normalized[col]).any():
+                inf_count = np.isinf(df_normalized[col]).sum()
+                df_normalized[col] = df_normalized[col].replace([np.inf, -np.inf], 0)
+                print(f"  Колонка '{col}': {inf_count} значений Inf заменено на 0")
             # Заполняем NaN нулями
             nan_count = df_normalized[col].isna().sum()
             if nan_count > 0:
@@ -253,7 +259,7 @@ def load_breakpoint_data(file_prefix: str = 'breakpoint_data') -> Optional[pd.Da
 
     try:
         # Загружаем с указанием строки заголовка (3-я строка = header=2)
-        df = pd.read_excel(latest_file, header=2)
+        df = pd.read_excel(latest_file, sheet_name='pivot', header=2)
         print(f"  Файл '{latest_file}' загружен успешно")
         print(f"  В нём уже {len(df)} строк")
 
@@ -571,6 +577,37 @@ def save_processed_dataframe(
         - При несовпадении структуры колонок запрашивается подтверждение у пользователя
         - Объединение выполняется через pd.concat с ignore_index=True
     """
+    # Список русских переводов колонок (порядок соответствует column_order)
+    column_translation = [
+        'Номер переключения', 'Статус переключения', 'Партия по плану', 'Дата выхода новой детали',
+        'Партия по факту', 'Дата переключения', 'Модель', 'Номер "старой" детали до переключения',
+        'Название "старой" детали до переключения',
+        'Количество "старых" деталей до переключения на Safety Stock',
+        'Количество партий со "старыми" деталями до переключения',
+        'Конфигурация для использования остатка "старых" деталей',
+        'Партии для использования остатка "старых" деталей',
+        'Привод (трансмиссия)', 'Номер "новой" детали после переключения',
+        'Название "новой" детали после переключения',
+        'Код производственной линии "старой" детали до переключения',
+        'Название производственной линии "старой" детали до переключения',
+        'Код производственной линии "новой" детали после переключения',
+        'Название производственной линии "новой" детали после переключения',
+        'Количество "старых" деталей до переключения на 1 авто',
+        'Количество "новых" деталей после переключения на 1 авто',
+        'Количество "старых" деталей до переключения на 1 ящик',
+        'Количество "новых" деталей после переключения на 1 ящик',
+        'Размеры ящика (Д-Ш-В) до переключения',
+        'Размеры ящика (Д-Ш-В) после переключения',
+        'Размеры поддона (Д-Ш-В) до переключения',
+        'Размеры поддона (Д-Ш-В) после переключения',
+        'Использование "старых" деталей до переключения в производстве',
+        'Взаимозаменяемость "старых/новых" деталей до/после переключения',
+        'Название поставщика до переключения', 'Локализация до переключения',
+        'Название поставщика после переключения', 'Локализация после переключения',
+        'Описание переключения', 'Решение переключения', 'Код цвета',
+        'Название цвета', 'Комментарии',
+    ]
+
     # Загружаем самый свежий существующий файл (если есть)
     df_existing = load_breakpoint_data(file_prefix)
 
@@ -616,6 +653,9 @@ def save_processed_dataframe(
                 print("  Объединение отменено. Новые данные будут сохранены в отдельный файл.")
                 current_date = datetime.now().strftime('%Y-%m-%d')
                 filename = f"{current_date}_{file_prefix}_new.xlsx"
+                # Вставляем строку с русскими переводами после заголовков
+                russian_row = pd.DataFrame([column_translation], columns=df_new_data.columns)
+                df_new_data = pd.concat([df_new_data.iloc[:1], russian_row, df_new_data.iloc[1:]], ignore_index=True)
                 success = save_excel_with_formatting(df_new_data, filename)
                 return filename if success else None
 
@@ -625,6 +665,11 @@ def save_processed_dataframe(
     else:
         df_combined = df_new_data
         print(f"  Создаётся новый файл с {len(df_combined)} строками")
+
+    # Вставляем строку с русскими переводами на позицию 2 (индекс 1)
+    russian_row = pd.DataFrame([column_translation], columns=df_combined.columns)
+    df_combined = pd.concat([df_combined.iloc[:1], russian_row, df_combined.iloc[1:]], ignore_index=True)
+    print("  Добавлена строка с русскими переводами колонок")
 
     # Получаем текущую дату
     current_date = datetime.now().strftime('%Y-%m-%d')

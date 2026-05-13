@@ -51,6 +51,7 @@ import re
 import warnings
 from typing import Dict, List, Optional
 
+import numpy as np
 import pandas as pd
 
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
@@ -227,6 +228,16 @@ def fill_empty_values(df) -> list:
                 df.loc[nan_mask, col] = 0.0
                 columns_with_replacements.append(col)
                 print(f"  Колонка '{col}' (числовая): NaN - {nan_count}. Заполнено 0.0.")
+
+            # Используем np.isinf для проверки на бесконечность
+            if hasattr(df[col], 'dtype') and np.issubdtype(df[col].dtype, np.number):
+                inf_mask = np.isinf(df[col])
+                inf_count = inf_mask.sum()
+                if inf_count > 0:
+                    df.loc[inf_mask, col] = 0.0
+                    columns_with_replacements.append(col)
+                    print(f"  Колонка '{col}' (числовая): Inf - {inf_count}. Заполнено 0.0.")
+
         else:
             # НЕЧИСЛОВАЯ КОЛОНКА (object, datetime64, и др.):
             # Здесь могут быть np.nan (float), None, пустые строки
@@ -1074,9 +1085,11 @@ def config_lookup_for_single_bp(
         if qty_vehicle > 0:
             qty_batches = round(qty_in_ss / qty_vehicle, 2)
             df_result.at[idx, 'Quantity batches in SS'] = qty_batches
+        else:
+            qty_batches = 0.0
 
-            # Выводим пользователю Part No. Before
-            print(f"  {part_no_before}: Количество партий в SS = {qty_batches}")
+        # Выводим пользователю Part No. Before
+        print(f"  {part_no_before}: Количество партий в SS = {qty_batches}")
 
         # Поиск дополнительной конфигурации по Batch fact
         if batch_fact and batch_fact != '' and batch_fact != '-':
