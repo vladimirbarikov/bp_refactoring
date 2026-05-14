@@ -44,7 +44,6 @@
 Статус: Production
 """
 
-import io
 import os
 import sys
 import re

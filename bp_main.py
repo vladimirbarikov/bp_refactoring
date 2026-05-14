@@ -26,7 +26,6 @@ BP Refactoring Tool - Точка входа
 Лицензия: MIT
 Статус: Production
 """
-import io
 import os
 import re
 import sys
@@ -377,7 +376,7 @@ def save_excel_with_formatting(
                 worksheet.merge_range(0, 4, 0, 15, "ДЛЯ КЛАДОВЩИКОВ", warehouse_merged_format)
             if len(df_new_data.columns) > 29:
                 worksheet.merge_range(0, 28, 0, 29, "ДЛЯ КЛАДОВЩИКОВ", warehouse_merged_format)
-            
+
             # Остальные ячейки строки 0 оставляем пустыми (стиль merged_cell_format)
             for col_num in range(len(df_new_data.columns)):
                 if col_num in range(4, 16) or col_num in [28, 29]:

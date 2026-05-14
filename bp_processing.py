@@ -44,7 +44,6 @@ Breakpoint (BP). Он выполняет 18 последовательных ш�
 Лицензия: MIT
 Статус: Production
 """
-import io
 import os
 import sys
 import re
