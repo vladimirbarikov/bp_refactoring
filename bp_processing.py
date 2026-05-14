@@ -2016,35 +2016,95 @@ def main():
         wait_for_user()
         sys.exit(1)
 
+    # Автоматически найденные BP файлы
+    auto_bp_files = [f"{bp}.xlsx" for bp in new_bp_set] if new_bp_set else []
+
+    # Если есть новые BP, показываем сообщение о необходимости скачать их
     if len(new_bp_set) > 0:
         print("\n" + "!" * 60)
         print("  ВНИМАНИЕ: Найдены новые BP, которые отсутствуют в breakpoint_data.xlsx!")
         print("!" * 60)
         print("\n  Действия пользователя:")
-        print("    1. Скачайте из системы G-BOM все отсустсвующие Excel файлы BP")
+        print("    1. Скачайте из системы G-BOM все отсутствующие Excel файлы BP")
         print("    2. Поместите скачанные файлы в текущую папку")
         print("    3. Убедитесь, что файлы имеют формат: BP<номер>.xlsx")
         print("\n  После скачивания файлов программа продолжит работу.")
 
         wait_for_user("\n  Нажмите Enter, когда все файлы будут скачаны и помещены в текущую папку...")
 
+    # ВСЕГДА спрашиваем о ручном вводе дополнительных BP
+    print("\n" + "=" * 60)
+    print("РУЧНОЙ ВВОД BP НОМЕРОВ (ОПЦИОНАЛЬНО)")
+    print("=" * 60)
+
+    if auto_bp_files:
+        print(f"\n  Автоматически найдено {len(auto_bp_files)} BP для обработки.")
+        print("  Вы можете добавить дополнительные BP вручную.")
     else:
-        print("\n  Новых BP для обработки не найдено.")
-        print("-" * 60)
-        print("  ВОЗМОЖНОСТЬ РУЧНОГО ВВОДА BP:")
-        print("  Если вы хотите обработать конкретные BP, которые уже есть в папке,")
-        print("  вы можете указать их номера вручную.")
+        print("\n  Автоматически найденных BP нет.")
+        print("  Вы можете указать BP номера для обработки вручную.")
+
+    print("-" * 60)
+
+    while True:
+        try:
+            manual_input = input("\n  Хотите добавить BP номера для обработки вручную? (да/нет): ").strip().lower()
+            if manual_input == 'да':
+                break
+            elif manual_input == 'нет':
+                break
+            else:
+                print("  Некорректный ввод. Пожалуйста, введите 'да' или 'нет'.")
+        except KeyboardInterrupt:
+            print()
+            while True:
+                confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
+                if confirm == 'да':
+                    print("\n\nПрограмма прервана пользователем (Ctrl+C)")
+                    sys.exit(0)
+                elif confirm == 'нет':
+                    print("\nПродолжаем работу...")
+                    break
+                else:
+                    print("Пожалуйста, введите 'да' или 'нет'")
+
+    manual_bp_files = []
+
+    if manual_input == 'да':
+        print("\n  ИНСТРУКЦИЯ ПО ВВОДУ BP НОМЕРОВ:")
+        print("    1. Вводите номера BP в формате: BP26002813 (с префиксом 'BP')")
+        print("    2. После ввода каждого номера нажмите Enter")
+        print("    3. Для завершения ввода оставьте строку пустой и нажмите Enter")
+        print("    4. Пример: BP12345")
         print("-" * 60)
 
         while True:
             try:
-                manual_input = input("\n  Хотите указать BP номера для обработки вручную? (да/нет): ").strip().lower()
-                if manual_input == 'да':
+                bp_input = input("\n  Введите номер BP (или Enter для завершения): ").strip().upper()
+
+                if bp_input == '':
+                    if len(manual_bp_files) == 0:
+                        print("  Не введено ни одного BP.")
                     break
-                elif manual_input == 'нет':
-                    break
+
+                # Проверяем формат: должен начинаться с BP и содержать только цифры после этого
+                if bp_input.startswith('BP') and bp_input[2:].isdigit():
+                    # Добавляем .xlsx если нужно
+                    bp_filename = bp_input if bp_input.endswith('.xlsx') else f"{bp_input}.xlsx"
+
+                    # Проверяем, существует ли файл в текущей папке
+                    if os.path.exists(bp_filename):
+                        manual_bp_files.append(bp_filename)
+                        print(f"    → {bp_filename} добавлен в список для обработки")
+                    else:
+                        print(f"    ОШИБКА: Файл '{bp_filename}' не найден в текущей папке!")
+                        print("    Убедитесь, что файл скачан и находится в текущей директории.")
+                        continue
                 else:
-                    print("  Некорректный ввод. Пожалуйста, введите 'да' или 'нет'.")
+                    print(f"    ОШИБКА: '{bp_input}' не является корректным номером BP")
+                    print("    Используйте формат: BP26002813")
+                    continue
+
             except KeyboardInterrupt:
                 print()
                 while True:
@@ -2058,136 +2118,49 @@ def main():
                     else:
                         print("Пожалуйста, введите 'да' или 'нет'")
 
-        if manual_input == 'да':
-            print("\n  ИНСТРУКЦИЯ ПО ВВОДУ BP НОМЕРОВ:")
-            print("    1. Вводите номера BP в формате: BP26002813 (с префиксом 'BP')")
-            print("    2. После ввода каждого номера нажмите Enter")
-            print("    3. Для завершения ввода оставьте строку пустой и нажмите Enter")
-            print("    4. Пример: BP12345")
-            print("-" * 60)
-
-            manual_bp_files = []
-
-            while True:
-                try:
-                    bp_input = input("\n  Введите номер BP (или Enter для завершения): ").strip().upper()
-
-                    if bp_input == '':
-                        if len(manual_bp_files) == 0:
-                            print("  Не введено ни одного BP. Программа завершает работу.")
-                            sys.exit(0)
-                        break
-
-                    # Проверяем формат: должен начинаться с BP и содержать только цифры после этого
-                    if bp_input.startswith('BP') and bp_input[2:].isdigit():
-                        # Добавляем .xlsx если нужно
-                        bp_filename = bp_input if bp_input.endswith('.xlsx') else f"{bp_input}.xlsx"
-
-                        # Проверяем, существует ли файл в текущей папке
-                        if os.path.exists(bp_filename):
-                            manual_bp_files.append(bp_filename)
-                            print(f"    → {bp_filename} добавлен в список для обработки")
-                        else:
-                            print(f"    ОШИБКА: Файл '{bp_filename}' не найден в текущей папке!")
-                            print("    Убедитесь, что файл скачан и находится в текущей директории.")
-                            continue
-                    else:
-                        print(f"    ОШИБКА: '{bp_input}' не является корректным номером BP")
-                        print("    Используйте формат: BP26002813")
-                        continue
-
-                except KeyboardInterrupt:
-                    print()
-                    while True:
-                        confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
-                        if confirm == 'да':
-                            print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-                            sys.exit(0)
-                        elif confirm == 'нет':
-                            print("\nПродолжаем работу...")
-                            break
-                        else:
-                            print("Пожалуйста, введите 'да' или 'нет'")
-
-            # Проверяем, что введены файлы
-            if not manual_bp_files:
-                print("\n  Не введено ни одного BP. Программа завершает работу.")
-                sys.exit(0)
-
-            # Устанавливаем список файлов для обработки
-            bp_files = manual_bp_files
-            print("\n" + "=" * 60)
-            print("  РУЧНОЙ ВВОД BP ЗАВЕРШЁН")
-            print("=" * 60)
-            print(f"  Добавлено BP файлов для обработки: {len(bp_files)}")
-            for i, f in enumerate(bp_files, 1):
-                print(f"    {i}. {f}")
-
-            wait_for_user("\n  Нажмите Enter, чтобы продолжить...")
-
-            # Переходим к обработке файлов (пропускаем этап поиска BP файлов)
-            # Обработка каждого BP файла
-            processed_results = {}
-
-            for i, bp_file in enumerate(bp_files, 1):
-                print("\n" + "=" * 60)
-                print(f"ОБРАБОТКА BP ФАЙЛА {i}/{len(bp_files)}: {bp_file}")
-                print("=" * 60)
-
-                print(f"\nТекущий файл: {bp_file}")
-
-                wait_for_user("\nНажмите Enter для начала обработки этого файла...")
-
-                result = process_bp_file(bp_file, df_bom)
-                if result:
-                    processed_results[result['bp_number']] = result['dataframe']
-
-                if i < len(bp_files):
-                    wait_for_user("\nФайл обработан. Нажмите Enter для перехода к следующему файлу...")
-
-            # Итоги
-            print("\n" + "=" * 60)
-            print("ОБРАБОТКА ЗАВЕРШЕНА")
-            print("=" * 60)
-            print(f"\nОбработано файлов: {len(processed_results)}/{len(bp_files)}")
-
-            if processed_results:
-                print("\nОбработанные Breakpoint'ы:")
-                for bp_number in processed_results:
-                    print(f"   - {bp_number}")
-                return processed_results
-
-            print("\nНе обработано ни одного файла.")
-            return None
-
-        else:
-            print("\n  Программа завершает работу.")
-            wait_for_user()
-            sys.exit(0)
-
-    # ЭТАП 3: Поиск BP файлов
-    print("\n" + "=" * 60)
-    print("ЭТАП 3: Поиск BP файлов")
-    print("=" * 60)
-    bp_files = find_bp_files()
+    # Объединяем автоматически найденные BP с введёнными вручную
+    bp_files = list(set(auto_bp_files + manual_bp_files))
 
     if not bp_files:
-        print("Не найдено ни одного BP файла (формат: BP*.xlsx)")
-        print("Убедитесь, что файлы начинаются с 'BP' и имеют расширение .xlsx")
+        print("\n  Нет BP файлов для обработки. Программа завершает работу.")
         wait_for_user()
-        sys.exit(1)
+        sys.exit(0)
 
-    # Проверяем, появились ли файлы
-    print("\n  Проверка наличия скачанных файлов:")
-    expected_files = [f"{bp}.xlsx" for bp in new_bp_set]
+    print("\n" + "=" * 60)
+    print("  ИТОГОВЫЙ СПИСОК BP ДЛЯ ОБРАБОТКИ")
+    print("=" * 60)
+
+    if auto_bp_files:
+        print(f"\n  Автоматически найденные BP ({len(auto_bp_files)}):")
+        for f in sorted(auto_bp_files):
+            print(f"    • {f}")
+
+    if manual_bp_files:
+        print(f"\n  Введённые вручную BP ({len(manual_bp_files)}):")
+        for f in sorted(manual_bp_files):
+            print(f"    • {f}")
+
+    print(f"\n  Всего уникальных BP для обработки: {len(bp_files)}")
+
+    wait_for_user("\n  Нажмите Enter, чтобы продолжить...")
+
+    # ЭТАП 3: Проверка наличия BP файлов
+    print("\n" + "=" * 60)
+    print("ЭТАП 3: Проверка наличия BP файлов")
+    print("=" * 60)
+
+    # Проверяем, какие файлы из итогового списка bp_files реально существуют
+    print("\n  Проверка наличия файлов:")
+    existing_files = []
     missing_files = []
 
-    for expected_file in expected_files:
-        if os.path.exists(expected_file):
-            print(f"    {expected_file} - найден")
+    for bp_file in bp_files:
+        if os.path.exists(bp_file):
+            print(f"    {bp_file} - найден")
+            existing_files.append(bp_file)
         else:
-            print(f"    {expected_file} - НЕ НАЙДЕН")
-            missing_files.append(expected_file)
+            print(f"    {bp_file} - НЕ НАЙДЕН")
+            missing_files.append(bp_file)
 
     if missing_files:
         print("\n  Предупреждение: Не все файлы найдены!")
@@ -2215,15 +2188,27 @@ def main():
                     else:
                         print("Пожалуйста, введите 'да' или 'нет'")
 
+    # Используем существующие файлы для обработки
+    bp_files_to_process = existing_files
+
+    if not bp_files_to_process:
+        print("\n  Нет доступных BP файлов для обработки. Программа завершает работу.")
+        wait_for_user()
+        sys.exit(0)
+
+    print(f"\n  Будет обработано файлов: {len(bp_files_to_process)}")
+    for i, f in enumerate(bp_files_to_process, 1):
+        print(f"    {i}. {f}")
+
     # Пауза после поиска всех BP файлов
     wait_for_user()
 
     # Обработка каждого BP файла
     processed_results = {}
 
-    for i, bp_file in enumerate(bp_files, 1):
+    for i, bp_file in enumerate(bp_files_to_process, 1):
         print("\n" + "=" * 60)
-        print(f"ОБРАБОТКА BP ФАЙЛА {i}/{len(bp_files)}: {bp_file}")
+        print(f"ОБРАБОТКА BP ФАЙЛА {i}/{len(bp_files_to_process)}: {bp_file}")
         print("=" * 60)
 
         print(f"\nТекущий файл: {bp_file}")
@@ -2234,14 +2219,14 @@ def main():
         if result:
             processed_results[result['bp_number']] = result['dataframe']
 
-        if i < len(bp_files):
+        if i < len(bp_files_to_process):
             wait_for_user("\nФайл обработан. Нажмите Enter для перехода к следующему файлу...")
 
     # Итоги
     print("\n" + "=" * 60)
     print("ОБРАБОТКА ЗАВЕРШЕНА")
     print("=" * 60)
-    print(f"\nОбработано файлов: {len(processed_results)}/{len(bp_files)}")
+    print(f"\nОбработано файлов: {len(processed_results)}/{len(bp_files_to_process)}")
 
     if processed_results:
         print("\nОбработанные Breakpoint'ы:")
