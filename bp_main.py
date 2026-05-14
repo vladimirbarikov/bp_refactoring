@@ -313,10 +313,10 @@ def save_excel_with_formatting(
             workbook = writer.book
             worksheet = workbook.add_worksheet(sheet_name)
 
-            # Определяем форматы (без изменений)
-            merged_cell_format = workbook.add_format({
+            # Формат для объединённых ячеек "ДЛЯ КЛАДОВЩИКОВ" (фон #FDE9D9)
+            warehouse_merged_format = workbook.add_format({
                 'font_name': 'Arial', 'font_size': 10, 'bold': True,
-                'font_color': 'white', 'bg_color': '#0F243E',
+                'font_color': 'black', 'bg_color': '#FDE9D9',
                 'valign': 'vcenter', 'align': 'center', 'text_wrap': True, 'border': 1
             })
 
@@ -380,14 +380,15 @@ def save_excel_with_formatting(
 
             # === СТРОКА 0: объединённые ячейки ===
             if len(df_new_data.columns) > 15:
-                worksheet.merge_range(0, 4, 0, 15, "ДЛЯ КЛАДОВЩИКОВ", merged_cell_format)
+                worksheet.merge_range(0, 4, 0, 15, "ДЛЯ КЛАДОВЩИКОВ", warehouse_merged_format)
             if len(df_new_data.columns) > 29:
-                worksheet.merge_range(0, 28, 0, 29, "ДЛЯ КЛАДОВЩИКОВ", merged_cell_format)
+                worksheet.merge_range(0, 28, 0, 29, "ДЛЯ КЛАДОВЩИКОВ", warehouse_merged_format)
+            
             # Остальные ячейки строки 0 оставляем пустыми (стиль merged_cell_format)
             for col_num in range(len(df_new_data.columns)):
                 if col_num in range(4, 16) or col_num in [28, 29]:
                     continue
-                worksheet.write(0, col_num, '', merged_cell_format)
+                worksheet.write(0, col_num, '')
 
             # === СТРОКА 1: английские заголовки ===
             for col_num, header in enumerate(df_new_data.columns):
