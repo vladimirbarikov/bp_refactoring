@@ -22,7 +22,7 @@ BP Refactoring Tool - Точка входа
 Версия: 1.0
 Совместимость: Python 3.12.3+, Pandas 3.0.2+, OpenPyXL 3.1.5+
 Поддержка: PLD Engineering Center
-Дата создания: 2026-05-07
+Дата создания: 2026-05-14
 Лицензия: MIT
 Статус: Production
 """
