@@ -1535,6 +1535,52 @@ def translate_interchangeable(df_bp_new, bp_number):
     return df_bp_new
 
 
+def save_processed_bp(df: pd.DataFrame, bp_number: str, base_dir: Optional[str] = None) -> str:
+    """
+    Сохраняет обработанный BP DataFrame в Excel файл внутри папки с датой.
+    
+    Папка: YYYY-MM-DD_processed_bp
+    Файл:  YYYY-MM-DD_BP<номер>.xlsx
+    
+    Параметры:
+        df: DataFrame для сохранения
+        bp_number: номер BP (например 'BP26002813')
+        base_dir: базовая директория (по умолчанию текущая рабочая папка)
+    
+    Возвращает:
+        str: полный путь к сохранённому файлу
+    """
+    if base_dir is None:
+        base_dir = os.getcwd()
+
+    # Формируем имя папки с сегодняшней датой
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    backup_folder = os.path.join(base_dir, f"{today_str}_processed_bp")
+
+    # Создаём папку, если её нет (только при первом сохранении)
+    os.makedirs(backup_folder, exist_ok=True)
+
+    # Имя файла
+    filename = f"{today_str}_{bp_number}.xlsx"
+    filepath = os.path.join(backup_folder, filename)
+
+    # Сохраняем DataFrame без индекса
+    try:
+        # Убеждаемся, что данные очищены от проблемных символов
+        df_to_save = clean_dataframe_strings(df)
+        df_to_save.to_excel(filepath, index=False)
+        print(f"  [Бэкап] Сохранён файл: {filepath}")
+        return filepath
+    except PermissionError:
+        print(f"  [ОШИБКА] Нет прав для записи файла: {filepath}")
+        print("  Закройте файл, если он открыт в Excel, и попробуйте снова.")
+    except OSError as e:
+        print(f"  [ОШИБКА] Ошибка файловой системы: {e}")
+    except Exception as e:
+        print(f"  [ОШИБКА] Не удалось сохранить бэкап для {bp_number}: {e}")
+    return ""
+
+
 def process_bp_file(bp_filename, df_bom):
     """
     Обработка одного BP файла через 18 последовательных шагов.
@@ -2229,7 +2275,10 @@ def main():
 
         result = process_bp_file(bp_file, df_bom)
         if result:
+            bp_num = result['bp_number'] 
             processed_results[result['bp_number']] = result['dataframe']
+            # Сохранение бэкапа
+            save_processed_bp(result['dataframe'], bp_num)
 
         if i < len(bp_files_to_process):
             wait_for_user("\nФайл обработан. Нажмите Enter для перехода к следующему файлу...")
