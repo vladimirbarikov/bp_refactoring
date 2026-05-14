@@ -45,12 +45,6 @@ from bp_summary import main as summary_main
 
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
-# Для Windows консоли
-if sys.platform == 'win32':
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
-
-
 def clear_screen():
     """
     Очистка экрана консоли

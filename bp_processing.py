@@ -59,12 +59,6 @@ from openpyxl.utils.exceptions import InvalidFileException
 
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
-# Для Windows консоли
-if sys.platform == 'win32':
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
-
-
 def clean_surrogates(text):
     """
     Удаляет суррогатные символы Unicode из строки.
