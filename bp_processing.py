@@ -1434,13 +1434,18 @@ def translate_production_part_disposal(df_bp_new, bp_number):
                         print("Пожалуйста, введите 'да' или 'нет'")
 
     # Применяем переводы
-    df_bp_new['Production Part Disposal'] = df_bp_new['Production Part Disposal'].map(translations).fillna(df_bp_new['Production Part Disposal'])
+    df_bp_new['Production Part Disposal'] = df_bp_new['Production Part Disposal'].replace(translations)
 
     # Показываем результат
     print("\n  Результат перевода 'Production Part Disposal':")
     result_df = df_bp_new[['Production Part Disposal']].drop_duplicates()
     for _, row in result_df.iterrows():
-        display_value = row['Production Part Disposal'] if len(row['Production Part Disposal']) <= 60 else row['Production Part Disposal'][:57] + '...'
+        val = row['Production Part Disposal']
+        if pd.isna(val):
+            display_value = ''
+        else:
+            val_str = str(val)
+            display_value = val_str if len(val_str) <= 60 else val_str[:57] + '...'
         print(f"    {display_value}")
 
     return df_bp_new
@@ -1513,13 +1518,18 @@ def translate_interchangeable(df_bp_new, bp_number):
                         print("Пожалуйста, введите 'да' или 'нет'")
 
     # Применяем переводы
-    df_bp_new['Interchangeable'] = df_bp_new['Interchangeable'].map(translations).fillna(df_bp_new['Interchangeable'])
+    df_bp_new['Interchangeable'] = df_bp_new['Interchangeable'].replace(translations)
 
     # Показываем результат
     print("\n  Результат перевода 'Interchangeable':")
     result_df = df_bp_new[['Interchangeable']].drop_duplicates()
     for _, row in result_df.iterrows():
-        display_value = row['Interchangeable'] if len(row['Interchangeable']) <= 60 else row['Interchangeable'][:57] + '...'
+        val = row['Interchangeable']
+        if pd.isna(val):
+            display_value = ''
+        else:
+            val_str = str(val)
+            display_value = val_str if len(val_str) <= 60 else val_str[:57] + '...'
         print(f"    {display_value}")
 
     return df_bp_new
@@ -1976,17 +1986,19 @@ def main():
         """)
 
     print("\nБудут обработаны следующие шаги для каждого BP файла:")
-    print("   1. Статус тех. изменения (Breakpoint)")
-    print("   2. Количество старых деталей на складе Safety Stock")
-    print("   3. Перевод названий деталей")
-    print("   4. Поиск официальных названий поставщиков")
-    print("   5. Статусы локализации поставщиков")
-    print("   6. Перевод описаний и решений")
-    print("   7. Перевод цвета деталей")
-    print("   8. Обработка рабочих центров")
-    print("   9. Перевод требований по дальнейшему использованию или утилизации")
-    print("   10. Перевод требований по взаимозаменяемости")
-    print("   11. Проверка наличия деталей в BOM")
+    print("   1. Загрузка BOM (Bill of Materials)")
+    print("   2. Поиск новых тех. изменений (Breakpoint)")
+    print("   3. Статус тех. изменения (Breakpoint)")
+    print("   4. Количество старых деталей на складе Safety Stock")
+    print("   5. Перевод названий деталей")
+    print("   6. Поиск официальных названий поставщиков")
+    print("   7. Статусы локализации поставщиков")
+    print("   8. Перевод описаний и решений")
+    print("   9. Перевод цвета деталей")
+    print("   10. Обработка рабочих центров")
+    print("   11. Перевод требований по дальнейшему использованию или утилизации")
+    print("   12. Перевод требований по взаимозаменяемости")
+    print("   13. Проверка наличия деталей в BOM")
 
     wait_for_user()
 
