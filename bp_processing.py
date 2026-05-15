@@ -743,7 +743,6 @@ def new_bp_check():
     3. Применяет фильтры к списку BP:
        - IsUnBomBP = "No"
        - Status != 'Closed'
-       - Date >= 01.04.2026 или пустая дата
        - Part Name (E) не содержит "SOFTWARE"
     4. Находит разницу между BP в отфильтрованном списке и уже обработанными
 
@@ -876,14 +875,7 @@ def new_bp_check():
     df_filtered = df_filtered[mask2]
     print(f"    - Фильтр Status ≠ 'Closed': {initial_count} → {len(df_filtered)} строк")
 
-    # Фильтр 3: Date >= 01.04.2026 ИЛИ дата пустая
-    initial_count = len(df_filtered)
-    cutoff_date = pd.to_datetime('2026-04-01')
-    mask3 = (df_filtered['Date'] >= cutoff_date) | (df_filtered['Date'].isna())
-    df_filtered = df_filtered[mask3]
-    print(f"    - Фильтр Date >= 01.04.2026 или пустая дата: {initial_count} → {len(df_filtered)} строк")
-
-    # Фильтр 4: Part Name (E) НЕ содержит слово SOFTWARE
+    # Фильтр 3: Part Name (E) НЕ содержит слово SOFTWARE
     initial_count = len(df_filtered)
     software_mask = df_filtered['Part Name (E)'].str.lower().str.contains('software', na=False)
     df_filtered = df_filtered[~software_mask]
@@ -2034,17 +2026,19 @@ def main():
     print("\nБудут обработаны следующие шаги для каждого BP файла:")
     print("   1. Загрузка BOM (Bill of Materials)")
     print("   2. Поиск новых тех. изменений (Breakpoint)")
-    print("   3. Статус тех. изменения (Breakpoint)")
-    print("   4. Количество старых деталей на складе Safety Stock")
-    print("   5. Перевод названий деталей")
-    print("   6. Поиск официальных названий поставщиков")
-    print("   7. Статусы локализации поставщиков")
-    print("   8. Перевод описаний и решений")
-    print("   9. Перевод цвета деталей")
-    print("   10. Обработка рабочих центров")
-    print("   11. Перевод требований по дальнейшему использованию или утилизации")
-    print("   12. Перевод требований по взаимозаменяемости")
-    print("   13. Проверка наличия деталей в BOM")
+    print("   3. Загрузка BP файла и выбор колонок для обработки")
+    print("   4. Выбор нужных колонок для обработки")
+    print("   5. Статус тех. изменения (Breakpoint)")
+    print("   6. Количество старых деталей на складе Safety Stock")
+    print("   7. Перевод названий деталей")
+    print("   8. Поиск официальных названий поставщиков")
+    print("   9. Статусы локализации поставщиков")
+    print("   10. Перевод описаний и решений")
+    print("   11. Перевод цвета деталей")
+    print("   12. Обработка рабочих центров")
+    print("   13. Перевод требований по дальнейшему использованию или утилизации")
+    print("   14. Перевод требований по взаимозаменяемости")
+    print("   15. Проверка наличия деталей в BOM")
 
     wait_for_user()
 
