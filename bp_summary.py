@@ -1074,17 +1074,30 @@ def config_lookup_for_single_bp(
                     config_matches['Batch code'].str.startswith(batch_prefix, na=False)
                 ]
                 if not config_match.empty:
+                    # Configuration: берём ПЕРВОЕ значение (единственное)
                     config_value = safe_str_convert(config_match.iloc[0].get('Configuration', ''))
                     if config_value and config_value != 'nan':
                         df_result.at[idx, 'Configuration for old parts using out'] = config_value
 
-                    batch_code_value = safe_str_convert(config_match.iloc[0].get('Batch code', ''))
-                    if batch_code_value and batch_code_value != 'nan':
-                        df_result.at[idx, 'Batches for old parts using out'] = batch_code_value
+                    # Batches и Transmission: собираем ВСЕ значения с сохранением порядка и соответствия
+                    all_batch_codes = []
+                    all_transmissions = []
+                    for _, row in config_match.iterrows():
+                        bc = safe_str_convert(row.get('Batch code', ''))
+                        trans = safe_str_convert(row.get('Transmission', ''))
 
-                    transmission_value = safe_str_convert(config_match.iloc[0].get('Transmission', ''))
-                    if transmission_value and transmission_value != 'nan':
-                        df_result.at[idx, 'Transmission'] = transmission_value
+                        # Пропускаем строки, где оба поля пустые (необязательно)
+                        if (not bc or bc == 'nan') and (not trans or trans == 'nan'):
+                            continue
+
+                        all_batch_codes.append(bc if bc and bc != 'nan' else '')
+                        all_transmissions.append(trans if trans and trans != 'nan' else '')
+
+                    # Однократное присвоение после цикла
+                    if all_batch_codes:
+                        df_result.at[idx, 'Batches for old parts using out'] = '\n'.join(all_batch_codes)
+                    if all_transmissions:
+                        df_result.at[idx, 'Transmission'] = '\n'.join(all_transmissions)
 
                     print(f"  Найдена конфигурация для {batch_fact}")
 
