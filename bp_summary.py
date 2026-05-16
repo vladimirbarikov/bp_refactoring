@@ -704,7 +704,7 @@ def create_pair_dict(
     result['Change Date'] = None  # date (будет заполнен позже как строка ГГГГ-ММ-ДД)
     result['Quantity batches in SS'] = 0.0
     result['Configuration for old parts using out'] = ''
-    result['Batches for old parts using out'] = 0.0
+    result['Batches for old parts using out'] = ''
     result['Transmission'] = ''
     result['Quantity per Box Before'] = 0.0
     result['Quantity per Box After'] = 0.0
