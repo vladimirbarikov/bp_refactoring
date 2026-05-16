@@ -1656,7 +1656,7 @@ def process_single_bp(
             df_current = user_input_for_single_bp(df_current, bp_number)
             show_dataframe_preview(
                 df_current, "Ввод данных Batch fact и Change Date",
-                focus_columns=['BP_No', 'Batch fact', 'Change Date', 'Part No. Before', 'Part No. After']
+                focus_columns=['BP_No', 'Batch plan', 'New Part Available Date', 'Batch fact', 'Change Date', 'Part No. Before', 'Part No. After']
             )
 
             continue_flag, df_current, saved_state = confirm_step("Ввод данных Batch fact и Change Date", df_current, saved_state)
@@ -1669,7 +1669,11 @@ def process_single_bp(
         df_current = config_lookup_for_single_bp(df_current, df_config)
         show_dataframe_preview(
             df_current, "Поиск данных в конфигурационном файле",
-            focus_columns=['BP_No', 'Part No. Before', 'Quantity in SS', 'Quantity batches in SS', 'Configuration for old parts using out']
+            focus_columns=[
+                'BP_No', 'BOM Product', 'Part No. Before', 'Quantity in SS',\
+                'Quantity batches in SS', 'Configuration for old parts using out', 
+                'Batches for old parts using out', 'Transmission',
+            ]
         )
 
         continue_flag, df_current, saved_state = confirm_step("Поиск данных в конфигурационном файле", df_current, saved_state)
