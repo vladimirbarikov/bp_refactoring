@@ -11,20 +11,21 @@ Breakpoint (BP). Он выполняет 18 последовательных ш�
     1. Загрузка BP файла
     2. Выбор нужных колонок
     3. Выбор статуса технического изменения
-    4. Ввод количества деталей в SS
-    5. Перевод названий деталей
-    6. Поиск официальных названий поставщиков
-    7. Ввод статуса локализации поставщиков
-    8. Фильтрация китайских символов
-    9. Перевод описания к изменению
-    10. Перевод решения к изменению
-    11. Обработка цветов и Color Code
-    12. Обработка рабочих центров
-    13. Перевод требований по утилизации старых деталей
-    14. Перевод требований по взаимозаменяемости
-    15. Проверка наличия деталей в BOM
-    16. Упорядочивание колонок
-    17. Сохранение результата
+    4. Заполнение пустых значений
+    5. Ввод количества деталей в SS
+    6. Перевод названий деталей
+    7. Поиск официальных названий поставщиков
+    8. Ввод статуса локализации поставщиков
+    9. Фильтрация китайских символов в описании и решении
+    10. Перевод описания к изменению
+    11. Перевод решения к изменению
+    12. Обработка цветов и Color Code
+    13. Обработка рабочих центров
+    14. Перевод требований по утилизации старых деталей
+    15. Перевод требований по взаимозаменяемости
+    16. Проверка наличия деталей в BOM
+    17. Упорядочивание колонок
+    18. Сохранение результата
 
 Каждый шаг включает:
     - Интерактивное взаимодействие с пользователем для ввода переводов
@@ -1674,7 +1675,7 @@ def process_bp_file(bp_filename, df_bom):
             print(f"  Статус для BP {bp_number} уже задан: {df_bp_new['Status'].iloc[0]}")
         show_dataframe_preview(
             df_bp_new, "Выбор статуса тех. изменения",
-            focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Update Type', 'Part No.', 'Part Name(CHN)']
+            focus_columns=['BP_No', 'Status', 'BOM Product', 'Update Type', 'Part No.', 'Part Name(CHN)']
         )
 
         continue_flag, df_bp_new, saved_state = confirm_step("Выбор статуса тех. изменения", df_bp_new, saved_state)
@@ -1690,7 +1691,7 @@ def process_bp_file(bp_filename, df_bom):
 
         show_dataframe_preview(
             df_bp_new, "Ввод количества деталей в SS",
-            focus_columns=['BP_No', 'Status', 'Update Type', 'BOM Product', 'Part No.', 'Part Name (CHN)', 'Quantity in SS']
+            focus_columns=['BP_No', 'Status', 'BOM Product', 'Update Type', 'Part No.', 'Part Name (CHN)', 'Quantity in SS']
         )
 
         continue_flag, df_bp_new, saved_state = confirm_step(
@@ -1716,7 +1717,7 @@ def process_bp_file(bp_filename, df_bom):
                 df_bp_new = df_bp_new.drop(['Part Name(CHN)'], axis=1)
             show_dataframe_preview(
                 df_bp_new, "Перевод названий деталей (после)",
-                focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Part No.', 'Part Name (RUS)']
+                focus_columns=['BP_No', 'Status', 'BOM Product', 'Update Type', 'Part No.', 'Part Name (RUS)']
             )
 
         continue_flag, df_bp_new, saved_state = confirm_step(
@@ -1742,7 +1743,7 @@ def process_bp_file(bp_filename, df_bom):
                 df_bp_new = df_bp_new.drop(['Supplier Name'], axis=1)
             show_dataframe_preview(
                 df_bp_new, "Поиск официальных названий поставщиков (после)",
-                focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Supplier Name (RUS)']
+                focus_columns=['BP_No', 'Status', 'BOM Product', 'Update Type', 'Part No.', 'Part Name (RUS)', 'Supplier Name (RUS)']
             )
 
         continue_flag, df_bp_new, saved_state = confirm_step("Поиск официальных названий поставщиков", df_bp_new, saved_state)
@@ -1756,7 +1757,7 @@ def process_bp_file(bp_filename, df_bom):
         df_bp_new = get_supplier_localization_status(df_bp_new, bp_number)
         show_dataframe_preview(
             df_bp_new, "Ввод статуса локализации поставщиков",
-            focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Supplier Name (RUS)', 'Localization']
+            focus_columns=['BP_No', 'Status', 'BOM Product', 'Update Type', 'Part No.', 'Part Name (RUS)', 'Supplier Name (RUS)', 'Localization']
         )
 
         continue_flag, df_bp_new, saved_state = confirm_step(
@@ -1791,7 +1792,7 @@ def process_bp_file(bp_filename, df_bom):
                 df_bp_new = df_bp_new.drop(['Change Description'], axis=1)
             show_dataframe_preview(
                 df_bp_new, "Перевод описания (после)",
-                focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Change Description (RUS)']
+                focus_columns=['BP_No', 'Status', 'BOM Product', 'Update Type', 'Part No.', 'Part Name (RUS)', 'Change Description (RUS)']
             )
 
         continue_flag, df_bp_new, saved_state = confirm_step("Перевод описания изменений", df_bp_new, saved_state)
@@ -1815,7 +1816,7 @@ def process_bp_file(bp_filename, df_bom):
                 df_bp_new = df_bp_new.drop(['Solution'], axis=1)
             show_dataframe_preview(
                 df_bp_new, "Перевод решения (после)",
-                focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Solution (RUS)']
+                focus_columns=['BP_No', 'Status', 'BOM Product', 'Update Type', 'Part No.', 'Part Name (RUS)', 'Solution (RUS)']
             )
 
         continue_flag, df_bp_new, saved_state = confirm_step("Перевод решения", df_bp_new, saved_state)
@@ -1857,7 +1858,7 @@ def process_bp_file(bp_filename, df_bom):
 
         show_dataframe_preview(
             df_bp_new, "Обработка цветов",
-            focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Color Code', 'Color Name (RUS)']
+            focus_columns=['BP_No', 'Status', 'BOM Product', 'Update Type', 'Part No.', 'Part Name (RUS)', 'Color Code', 'Color Name (RUS)']
         )
 
         continue_flag, df_bp_new, saved_state = confirm_step("Обработка цветов и Color Code", df_bp_new, saved_state)
@@ -1880,7 +1881,7 @@ def process_bp_file(bp_filename, df_bom):
                 print("  Все значения рабочих центров равны '-' или пустые. Перевод не требуется.")
             show_dataframe_preview(
                 df_bp_new, "Обработка рабочих центров",
-                focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Workcenter Name']
+                focus_columns=['BP_No', 'Status', 'BOM Product', 'Update Type', 'Part No.', 'Part Name (RUS)', 'Workcenter Name']
             )
 
         continue_flag, df_bp_new, saved_state = confirm_step("Обработка рабочих центров", df_bp_new, saved_state)
@@ -1894,7 +1895,7 @@ def process_bp_file(bp_filename, df_bom):
         df_bp_new = translate_production_part_disposal(df_bp_new, bp_number)
         show_dataframe_preview(
             df_bp_new, "Перевод требований по утилизации старых деталей",
-            focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Production Part Disposal']
+            focus_columns=['BP_No', 'Status', 'BOM Product', 'Update Type', 'Part No.', 'Part Name (RUS)', 'Production Part Disposal']
         )
 
         continue_flag, df_bp_new, saved_state = confirm_step(
@@ -1910,7 +1911,7 @@ def process_bp_file(bp_filename, df_bom):
         df_bp_new = translate_interchangeable(df_bp_new, bp_number)
         show_dataframe_preview(
             df_bp_new, "Перевод требований по взаимозаменяемости",
-            focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Interchangeable']
+            focus_columns=['BP_No', 'Status', 'BOM Product', 'Update Type', 'Part No.', 'Part Name (RUS)', 'Interchangeable']
         )
 
         continue_flag, df_bp_new, saved_state = confirm_step(
@@ -1944,7 +1945,7 @@ def process_bp_file(bp_filename, df_bom):
 
         show_dataframe_preview(
             df_bp_new, "Проверка наличия в BOM",
-            focus_columns=['BP_No', 'Status', 'Change', 'BOM Product', 'Part No.', 'Part Name (RUS)', 'Is in BOM']
+            focus_columns=['BP_No', 'Status', 'BOM Product', 'Update Type', 'Part No.', 'Part Name (RUS)', 'Is in BOM']
         )
 
         continue_flag, df_bp_new, saved_state = confirm_step("Проверка наличия в BOM", df_bp_new, saved_state)
@@ -1973,7 +1974,7 @@ def process_bp_file(bp_filename, df_bom):
         df_bp_new = df_bp_new[existing_cols]
         show_dataframe_preview(
             df_bp_new, "Упорядочивание колонок (финальный результат)",
-            focus_columns=['BP_No', 'Status', 'Change', 'Part No.', 'Part Name (RUS)', 'Is in BOM']
+            focus_columns=['BP_No', 'Status', 'In Stock', 'New Part Available Date', 'BOM Product', 'Change', 'Update Type', 'Is in BOM', 'Part No.']
         )
 
         continue_flag, df_bp_new, saved_state = confirm_step("Упорядочивание колонок", df_bp_new, saved_state)
