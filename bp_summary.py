@@ -920,7 +920,7 @@ def user_input_for_single_bp(
     Запрашивает у пользователя ввод данных для всего технического изменения (BP).
     ...
     """
-    print(f"\n--- Ввод данных для BP {bp_number} ---")
+    print(f"\n--- Ввод данных для {bp_number} ---")
     print(f"Всего строк для обработки: {len(df_current)}")
 
     df_result = df_current.copy()
@@ -1088,8 +1088,6 @@ def config_lookup_for_single_bp(
         return df_result
 
     # Второй проход: поиск дополнительной конфигурации (только если Batch plan введён)
-    print("\n  Поиск дополнительной конфигурации по Batch plan...")
-
     for idx, row in df_result.iterrows():
         part_no_before = safe_str_convert(row.get('Part No. Before', ''))
 
@@ -1139,8 +1137,6 @@ def config_lookup_for_single_bp(
                     df_result.at[idx, 'Batches for old parts using out'] = '\n'.join(all_batch_codes)
                 if all_transmissions:
                     df_result.at[idx, 'Transmission'] = '\n'.join(all_transmissions)
-
-                print(f"  {part_no_before}: Найдена конфигурация для {batch_plan}")
 
     return df_result
 
