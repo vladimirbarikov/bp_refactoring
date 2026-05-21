@@ -48,6 +48,8 @@ import os
 import sys
 import re
 import warnings
+import time
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -993,7 +995,7 @@ def config_lookup_for_single_bp(
     Функция:
         1. Находит Quantity vehicle in batch по BOM Product
         2. Рассчитывает Quantity batches in SS = Quantity in SS / Quantity vehicle in batch
-        3. Ищет Configuration, Batch code, Transmission по Batch fact
+        3. Ищет Configuration, Batch code, Transmission по Batch plan
 
     Аргументы:
         df_current (pd.DataFrame): Текущий DataFrame с данными BP.
@@ -1028,6 +1030,22 @@ def config_lookup_for_single_bp(
     if 'Transmission' in df_config.columns:
         df_config['Transmission'] = df_config['Transmission'].astype(str).str.strip()
 
+    # ПРОВЕРКА BATCH PLAN ОДИН РАЗ (до цикла, так как он одинаков для всего BP)
+    batch_plan = safe_str_convert(df_result.iloc[0].get('Batch plan', '')) if len(df_result) > 0 else ''
+    batch_plan_missing = (not batch_plan or batch_plan == '' or batch_plan == '-')
+
+    if batch_plan_missing:
+        print("\n" + "-" * 60)
+        print("  ВНИМАНИЕ: BATCH PLAN НЕ ВВЕДЁН!")
+        print("  Поиск конфигурации для полей невозможен:")
+        print("    • Configuration for old parts using out")
+        print("    • Batches for old parts using out")
+        print("    • Transmission")
+        print("  Эти поля останутся пустыми для ВСЕХ деталей в этом BP.")
+        print("\n" + "-" * 60)
+
+    # Первый проход: расчёт Quantity batches in SS (не требует Batch plan)
+    # Это нужно делать для всех строк, независимо от наличия Batch plan
     for idx, row in df_result.iterrows():
         # Получаем Part No. Before - только для них нужно считать количество партий
         part_no_before = safe_str_convert(row.get('Part No. Before', ''))
@@ -1038,7 +1056,6 @@ def config_lookup_for_single_bp(
 
         # Получаем BOM Product для поиска в конфигурации
         bom_product = safe_str_convert(row.get('BOM Product', ''))
-        batch_fact = safe_str_convert(row.get('Batch fact', ''))
 
         # Получаем Quantity in SS
         quantity_in_ss = row.get('Quantity in SS', 0)
@@ -1066,46 +1083,72 @@ def config_lookup_for_single_bp(
         # Выводим пользователю Part No. Before
         print(f"  {part_no_before}: Количество партий в SS = {qty_batches}")
 
-        # Поиск дополнительной конфигурации по Batch fact
-        if batch_fact and batch_fact != '' and batch_fact != '-':
-            if 'Batch code' in df_config.columns and 'Configuration' in df_config.columns:
-                batch_prefix = batch_fact[:3] if len(batch_fact) >= 3 else batch_fact
-                config_match = config_matches[
-                    config_matches['Batch code'].str.startswith(batch_prefix, na=False)
-                ]
-                if not config_match.empty:
-                    # Configuration: берём ПЕРВОЕ значение (единственное)
-                    config_value = safe_str_convert(config_match.iloc[0].get('Configuration', ''))
-                    if config_value and config_value != 'nan':
-                        df_result.at[idx, 'Configuration for old parts using out'] = config_value
+    # Если Batch plan не введён - выходим, дальше искать нечего
+    if batch_plan_missing:
+        return df_result
 
-                    # Batches и Transmission: собираем ВСЕ значения с сохранением порядка и соответствия
-                    all_batch_codes = []
-                    all_transmissions = []
-                    for _, row in config_match.iterrows():
-                        bc = safe_str_convert(row.get('Batch code', ''))
-                        trans = safe_str_convert(row.get('Transmission', ''))
+    # Второй проход: поиск дополнительной конфигурации (только если Batch plan введён)
+    print("\n  Поиск дополнительной конфигурации по Batch plan...")
 
-                        # Пропускаем строки, где оба поля пустые (необязательно)
-                        if (not bc or bc == 'nan') and (not trans or trans == 'nan'):
-                            continue
+    for idx, row in df_result.iterrows():
+        part_no_before = safe_str_convert(row.get('Part No. Before', ''))
 
-                        all_batch_codes.append(bc if bc and bc != 'nan' else '')
-                        all_transmissions.append(trans if trans and trans != 'nan' else '')
+        # Пропускаем строки, где нет Before детали (только After)
+        if part_no_before == '' or part_no_before == '-':
+            continue
 
-                    # Однократное присвоение после цикла
-                    if all_batch_codes:
-                        df_result.at[idx, 'Batches for old parts using out'] = '\n'.join(all_batch_codes)
-                    if all_transmissions:
-                        df_result.at[idx, 'Transmission'] = '\n'.join(all_transmissions)
+        bom_product = safe_str_convert(row.get('BOM Product', ''))
 
-                    print(f"  Найдена конфигурация для {batch_fact}")
+        if bom_product == '' or bom_product == '-':
+            continue
+
+        # Ищем в конфигурации по BOM Product
+        config_matches = df_config[df_config['BOM Product'] == bom_product]
+        if config_matches.empty:
+            continue
+
+        # Поиск дополнительной конфигурации по Batch plan
+        if 'Batch code' in df_config.columns and 'Configuration' in df_config.columns:
+            batch_prefix = batch_plan[:3] if len(batch_plan) >= 3 else batch_plan
+            config_match = config_matches[
+                config_matches['Batch code'].str.startswith(batch_prefix, na=False)
+            ]
+
+            if not config_match.empty:
+                # Configuration: берём ПЕРВОЕ значение
+                config_value = safe_str_convert(config_match.iloc[0].get('Configuration', ''))
+                if config_value and config_value != 'nan':
+                    df_result.at[idx, 'Configuration for old parts using out'] = config_value
+
+                # Batches и Transmission: собираем ВСЕ значения
+                all_batch_codes = []
+                all_transmissions = []
+                for _, row_match in config_match.iterrows():
+                    bc = safe_str_convert(row_match.get('Batch code', ''))
+                    trans = safe_str_convert(row_match.get('Transmission', ''))
+
+                    # Пропускаем строки, где оба поля пустые
+                    if (not bc or bc == 'nan') and (not trans or trans == 'nan'):
+                        continue
+
+                    all_batch_codes.append(bc if bc and bc != 'nan' else '')
+                    all_transmissions.append(trans if trans and trans != 'nan' else '')
+
+                # Однократное присвоение после цикла
+                if all_batch_codes:
+                    df_result.at[idx, 'Batches for old parts using out'] = '\n'.join(all_batch_codes)
+                if all_transmissions:
+                    df_result.at[idx, 'Transmission'] = '\n'.join(all_transmissions)
+
+                print(f"  {part_no_before}: Найдена конфигурация для {batch_plan}")
 
     return df_result
 
 
 def batch_file_loader_for_single_bp(
-        df_current: pd.DataFrame
+        df_current: pd.DataFrame,
+        bp_number: str,
+        base_dir: Optional[str] = None
     ) -> pd.DataFrame:
     """
     Загружает упаковочные листы и извлекает данные упаковки для деталей.
@@ -1164,7 +1207,7 @@ def batch_file_loader_for_single_bp(
     print("  1. Найдите номер партии в системе SCM по номеру детали")
     print("  2. Найдите в папке упаковочный лист (Excel файл) для найденной партии")
     print("  3. Папка с упаковочными листами находится здесь: \\hmmr_share\LD\Custom Clearance\Поставки\Серийный KD parts")
-    print("  4. СКОПИРУЙТЕ нужный файл упаковочного листа в ТЕКУЩУЮ папку (где находится программа)")
+    print("  4. СКОПИРУЙТЕ нужный файл упаковочного листа в папку .\\ГГГГ-ММ-ДД_processed_bp\\BP<номер>")
     print("  5. Введите имя файла для загрузки данных (или Enter чтобы пропустить)")
     print("-" * 60)
 
@@ -1209,8 +1252,17 @@ def batch_file_loader_for_single_bp(
                 }
                 break
 
+            if base_dir is None:
+                base_dir = os.getcwd()
+
+            # Формируем имя папки с сегодняшней датой
+            today_str = datetime.now().strftime('%Y-%m-%d')
+            backup_folder = os.path.join(base_dir, f"{today_str}_processed_bp")
+            bp_folder = os.path.join(backup_folder, bp_number)
+
             # Загружаем файл
-            df_batch = load_batch_file_by_name(filename, os.getcwd())
+            search_path = bp_folder
+            df_batch = load_batch_file_by_name(filename, search_path)
 
             if df_batch is not None:
                 # Извлекаем данные для детали
@@ -1357,7 +1409,7 @@ def batch_file_loader_for_single_bp(
         print("ИНСТРУКЦИЯ:")
         print("  1. Найдите в папке упаковочный лист (Excel файл) для партии указанной в колонке 'Batch fact'")
         print("  2. Папка с упаковочными листами находится здесь: \\hmmr_share\LD\Custom Clearance\Поставки\Серийный KD parts")
-        print("  3. СКОПИРУЙТЕ нужный файл упаковочного листа в ТЕКУЩУЮ папку (где находится программа)")
+        print("  3. СКОПИРУЙТЕ нужный файл упаковочного листа в папку .\\ГГГГ-ММ-ДД_processed_bp\\BP<номер>")
         print("  4. Введите имя файла для загрузки данных (или Enter чтобы пропустить)")
         print("-" * 60)
 
@@ -1394,8 +1446,17 @@ def batch_file_loader_for_single_bp(
                     print("    → Пропущено. Данные будут заполнены позже в Excel.")
                     break
 
+                if base_dir is None:
+                    base_dir = os.getcwd()
+
+                # Формируем имя папки с сегодняшней датой
+                today_str = datetime.now().strftime('%Y-%m-%d')
+                backup_folder = os.path.join(base_dir, f"{today_str}_processed_bp")
+                bp_folder = os.path.join(backup_folder, bp_number)
+
                 # Загружаем файл
-                df_batch = load_batch_file_by_name(filename, os.getcwd())
+                search_path = bp_folder
+                df_batch = load_batch_file_by_name(filename, search_path)
 
                 if df_batch is not None:
                     # Извлекаем данные для детали
@@ -1620,7 +1681,7 @@ def extract_packaging_data(
 
 def load_batch_file_by_name(
         filename: str,
-        search_path: str
+        search_path: str,
     ) -> Optional[pd.DataFrame]:
     """
     Загружает упаковочный лист по имени файла из указанной директории.
@@ -1708,11 +1769,14 @@ def process_single_bp(
         pd.DataFrame: Обработанный DataFrame для данного BP или пустой DataFrame
                       при отсутствии данных.
     """
+    bp_start_time = time.time()
+
     print(f"\n{'=' * 60}")
     print(f"ОБРАБОТКА BP: {bp_number}")
     print(f"{'=' * 60}")
 
     # === ПРЕДВАРИТЕЛЬНЫЙ ПРОСМОТР СТРОК С Change ===
+    step_start = time.time()
     print("\n[ПРЕДВАРИТЕЛЬНЫЙ ПРОСМОТР]")
     print("Строки с явным указанием 'Before Change' / 'After Change' в колонке 'Change':")
 
@@ -1750,6 +1814,9 @@ def process_single_bp(
         print("  ВНИМАНИЕ: Колонка 'Change' отсутствует в данных!")
         print("  Все изменения будут определяться только по колонке 'Update Type'")
 
+    step_elapsed = time.time() - step_start
+    print(f"  [ПРЕДВАРИТЕЛЬНЫЙ ПРОСМОТР. Время: {timedelta(seconds=int(step_elapsed))}]")
+
     print("\n" + "-" * 60)
     wait_for_user("\nНажмите Enter для продолжения поиска пар...")
 
@@ -1758,6 +1825,7 @@ def process_single_bp(
 
     # Шаг 1: Поиск пар Before/After
     while True:
+        step_start = time.time()
         print_step_header(1, 5, "Поиск пар Before/After")
         pairs = find_pairs(df_bp)
         print(f"  Найдено пар/строк: {len(pairs)}")
@@ -1777,11 +1845,14 @@ def process_single_bp(
 
         continue_flag, df_current, saved_state = confirm_step("Поиск пар Before/After", df_current, saved_state)
         if continue_flag:
+            step_elapsed = time.time() - step_start
+            print(f"  [Время шага 1: {timedelta(seconds=int(step_elapsed))}]")
             break
 
     # Шаг 2: Пользовательский ввод
     if interactive:
         while True:
+            step_start = time.time()
             print_step_header(2, 5, "Ввод данных Batch fact и Change Date")
             df_current = user_input_for_single_bp(df_current, bp_number)
             show_dataframe_preview(
@@ -1791,10 +1862,13 @@ def process_single_bp(
 
             continue_flag, df_current, saved_state = confirm_step("Ввод данных Batch fact и Change Date", df_current, saved_state)
             if continue_flag:
+                step_elapsed = time.time() - step_start
+                print(f"  [Время шага 2: {timedelta(seconds=int(step_elapsed))}]")
                 break
 
     # Шаг 3: Поиск данных в конфигурационном файле
     while True:
+        step_start = time.time()
         print_step_header(3, 5, "Поиск данных в конфигурационном файле")
         df_current = config_lookup_for_single_bp(df_current, df_config)
         show_dataframe_preview(
@@ -1808,12 +1882,15 @@ def process_single_bp(
 
         continue_flag, df_current, saved_state = confirm_step("Поиск данных в конфигурационном файле", df_current, saved_state)
         if continue_flag:
+            step_elapsed = time.time() - step_start
+            print(f"  [Время шага 3: {timedelta(seconds=int(step_elapsed))}]")
             break
 
     # Шаг 4: Загрузка данных из упаковочного листа
     while True:
+        step_start = time.time()
         print_step_header(4, 5, "Загрузка данных из упаковочного листа")
-        df_current = batch_file_loader_for_single_bp(df_current)
+        df_current = batch_file_loader_for_single_bp(df_current, bp_number)
         show_dataframe_preview(
             df_current, "Загрузка данных из упаковочного листа",
             focus_columns=[
@@ -1826,10 +1903,13 @@ def process_single_bp(
 
         continue_flag, df_current, saved_state = confirm_step("Загрузка данных из упаковочного листа", df_current, saved_state)
         if continue_flag:
+            step_elapsed = time.time() - step_start
+            print(f"  [Время шага 4: {timedelta(seconds=int(step_elapsed))}]")
             break
 
     # Шаг 5: Заполнение пустых значений
     while True:
+        step_start = time.time()
         print_step_header(5, 5, "Заполнение пустых значений")
 
         # Заполняем пустые значения во ВСЕХ колонках
@@ -1855,9 +1935,14 @@ def process_single_bp(
 
         continue_flag, df_current, saved_state = confirm_step("Заполнение пустых значений", df_current, saved_state)
         if continue_flag:
+            step_elapsed = time.time() - step_start
+            print(f"  [Время шага 5: {timedelta(seconds=int(step_elapsed))}]")
             break
 
-    print(f"\n  BP {bp_number} обработан. Добавлено строк: {len(df_current)}")
+    total_time = time.time() - bp_start_time
+    print(f"\n  [ИТОГО ВРЕМЯ ОБРАБОТКИ {bp_number}: {timedelta(seconds=int(total_time))}]")
+    print(f"  ({(total_time/60):.1f} минут)\n")
+    print(f"\n  {bp_number} обработан. Добавлено строк: {len(df_current)}")
     return df_current
 
 

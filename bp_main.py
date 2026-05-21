@@ -31,7 +31,8 @@ import re
 import sys
 import traceback
 import warnings
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from typing import Optional, List
 
 import pandas as pd
@@ -580,6 +581,9 @@ def main():
         KeyboardInterrupt: обрабатывается корректно с завершением программы
         Exception: перехватывается, выводится traceback и код возврата 1
     """
+    # НАЧАЛО ЗАМЕРА ОБЩЕГО ВРЕМЕНИ ПРОГРАММЫ
+    program_start_time = time.time()
+
     clear_screen()
 
     print("""
@@ -639,19 +643,51 @@ def main():
 
     # Шаг 1: Обработка BP файлов
     print("\n[1] Обработка BP файлов...")
+    bp_processing_start = time.time()
     processed_results = processing_main()
+    bp_processing_time = time.time() - bp_processing_start
 
     if not isinstance(processed_results, dict) or len(processed_results) == 0:
         print("\nОшибка: Не обработано ни одного BP файла!")
         sys.exit(1)
 
+    # Выводим время обработки BP
+    print(f"\n  [ВРЕМЯ ОБРАБОТКИ BP ФАЙЛОВ: {timedelta(seconds=int(bp_processing_time))}]")
+    print(f"  ({(bp_processing_time/60):.1f} минут)")
+
+    # Собираем времена обработки из processed_results
+    bp_times = {}
+    for bp_num, data in processed_results.items():
+        if isinstance(data, dict) and 'processing_time_seconds' in data:
+            bp_times[bp_num] = data['processing_time_seconds']
+            # Извлекаем DataFrame из словаря, если он там
+            if 'dataframe' in data:
+                processed_results[bp_num] = data['dataframe']
+
+    # Выводим детальное время по каждому BP из bp_processing
+    if bp_times:
+        print("\n  [ДЕТАЛЬНОЕ ВРЕМЯ ОБРАБОТКИ КАЖДОГО BP В МОДУЛЕ bp_processing]:")
+        for bp_num, bp_time in bp_times.items():
+            print(f"    • {bp_num}: {timedelta(seconds=int(bp_time))} ({(bp_time/60):.1f} мин)")
+
     # Шаг 2: Формирование итоговой таблицы
     print("\n[2] Формирование итоговой таблицы...")
+    summary_start = time.time()
     summary_df = summary_main(processed_results)
+    summary_time = time.time() - summary_start
+
+    if summary_df is None or summary_df.empty:
+        print("\nОшибка: Не удалось сформировать итоговую таблицу!")
+        sys.exit(1)
+
+    print(f"\n  [ВРЕМЯ ФОРМИРОВАНИЯ ИТОГОВОЙ ТАБЛИЦЫ: {timedelta(seconds=int(summary_time))}]")
+    print(f"  ({(summary_time/60):.1f} минут)")
 
     # Шаг 3: Сохранение результата
     print("\n[3] Сохранение результата...")
+    save_start = time.time()
     saved_file = save_processed_dataframe(summary_df, 'breakpoint_data')
+    save_time = time.time() - save_start
 
     if saved_file:
         print(f"\n  Готово! Файл: {saved_file}")
@@ -659,6 +695,26 @@ def main():
         print("\n  Ошибка при сохранении!")
         sys.exit(1)
 
+    # ИТОГОВОЕ ВРЕМЯ ПРОГРАММЫ
+    total_program_time = time.time() - program_start_time
+
+    print("\n" + "=" * 70)
+    print("ИТОГОВАЯ СТАТИСТИКА ВРЕМЕНИ")
+    print("=" * 70)
+    print(f"  Общее время работы программы: {timedelta(seconds=int(total_program_time))}")
+    print(f"  ({(total_program_time/60):.1f} минут)")
+    print("-" * 70)
+    print(f"  Время обработки BP файлов:      {timedelta(seconds=int(bp_processing_time))} ({(bp_processing_time/60):.1f} мин)")
+    print(f"  Время формирования сводной:     {timedelta(seconds=int(summary_time))} ({(summary_time/60):.1f} мин)")
+    print(f"  Время сохранения результата:    {timedelta(seconds=int(save_time))} ({(save_time/60):.1f} мин)")
+    print("=" * 70)
+
+    if bp_times:
+        print("\n  Время обработки каждого BP в модуле bp_processing:")
+        for bp_num, bp_time in bp_times.items():
+            print(f"    {bp_num}: {timedelta(seconds=int(bp_time))} ({(bp_time/60):.1f} мин)")
+
+    print(f"\n  Готово! Файл: {saved_file}")
 
 if __name__ == "__main__":
     sys.path.insert(0, os.path.dirname(__file__))

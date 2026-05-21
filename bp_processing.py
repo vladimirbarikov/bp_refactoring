@@ -49,7 +49,8 @@ import os
 import sys
 import re
 import warnings
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from typing import Optional
 
 import pandas as pd
@@ -1549,13 +1550,17 @@ def save_processed_bp(df: pd.DataFrame, bp_number: str, base_dir: Optional[str] 
     # Формируем имя папки с сегодняшней датой
     today_str = datetime.now().strftime('%Y-%m-%d')
     backup_folder = os.path.join(base_dir, f"{today_str}_processed_bp")
+    bp_folder = os.path.join(backup_folder, bp_number)
 
-    # Создаём папку, если её нет (только при первом сохранении)
-    os.makedirs(backup_folder, exist_ok=True)
+    if not os.path.exists(bp_folder):
+        os.makedirs(bp_folder)
+        print(f"Создана папка для BP {bp_number} для сохранения резервной копии и упаковочных документов.")
+    else:
+        print(f"Папка для BP {bp_number} уже существует.")
 
     # Имя файла
     filename = f"{today_str}_{bp_number}.xlsx"
-    filepath = os.path.join(backup_folder, filename)
+    filepath = os.path.join(backup_folder, bp_number, filename)
 
     # Сохраняем DataFrame без индекса
     try:
@@ -1611,6 +1616,9 @@ def process_bp_file(bp_filename, df_bom):
         17. Упорядочивание колонок
         18. Сохранение результата
     """
+    # НАЧАЛО ЗАМЕРА ВРЕМЕНИ
+    bp_start_time = time.time()
+
     print(f"\nОбработка файла: {bp_filename}")
 
     bp_number = bp_filename.replace('.xlsx', '')
@@ -1618,6 +1626,7 @@ def process_bp_file(bp_filename, df_bom):
 
     # Шаг 1: Загрузка BP файла
     while True:
+        step_start = time.time()  # Замер времени для шага
         print_step_header(1, 17, "Загрузка BP файла")
         df_bp = load_excel_file(bp_filename, "BP файл")
         if df_bp is None:
@@ -1629,11 +1638,14 @@ def process_bp_file(bp_filename, df_bom):
 
         continue_flag, df_bp, saved_state = confirm_step("Загрузка BP файла", df_bp, saved_state)
         if continue_flag:
+            step_elapsed = time.time() - step_start
+            print(f"  [Время шага 1: {timedelta(seconds=int(step_elapsed))}]")
             break
         # retry - повторяем шаг 1
 
     # Шаг 2: Выбор нужных колонок
     while True:
+        step_start = time.time()
         print_step_header(2, 17, "Выбор нужных колонок")
         bp_columns_to_keep = [
             'Change', 'BOM Product', 'Update Type', 'Part No.', 'Part Name(CHN)',
@@ -1662,11 +1674,14 @@ def process_bp_file(bp_filename, df_bom):
 
         continue_flag, df_bp_new, saved_state = confirm_step("Выбор нужных колонок", df_bp_new, saved_state)
         if continue_flag:
+            step_elapsed = time.time() - step_start
+            print(f"  [Время шага 2: {timedelta(seconds=int(step_elapsed))}]")
             break
         # retry - повторяем шаг 2
 
     # Шаг 3: Выбор статуса тех. изменения
     while True:
+        step_start = time.time()
         print_step_header(3, 17, "Выбор статуса тех. изменения")
         if 'Status' not in df_bp_new.columns or df_bp_new['Status'].iloc[0] == '-':
             status = get_bp_status(bp_number)
@@ -1680,11 +1695,14 @@ def process_bp_file(bp_filename, df_bom):
 
         continue_flag, df_bp_new, saved_state = confirm_step("Выбор статуса тех. изменения", df_bp_new, saved_state)
         if continue_flag:
+            step_elapsed = time.time() - step_start
+            print(f"  [Время шага 3: {timedelta(seconds=int(step_elapsed))}]")
             break
         # retry - повторяем шаг 3
 
     # Шаг 4: Ввод количества деталей в SS
     while True:
+        step_start = time.time()
         print_step_header(4, 17, "Ввод количества деталей в SS")
         quantity_dict = get_quantity_in_ss(df_bp_new, bp_number)
         df_bp_new['Quantity in SS'] = df_bp_new['Part No.'].map(quantity_dict).fillna(0).astype(int)
@@ -1698,11 +1716,14 @@ def process_bp_file(bp_filename, df_bom):
             "Ввод количества деталей в SS", df_bp_new, saved_state
         )
         if continue_flag:
+            step_elapsed = time.time() - step_start
+            print(f"  [Время шага 4: {timedelta(seconds=int(step_elapsed))}]")
             break
         # retry - повторяем шаг 4
 
     # Шаг 5: Перевод названий деталей
     while True:
+        step_start = time.time()
         print_step_header(5, 17, "Перевод названий деталей")
         if 'Part Name(CHN)' in df_bp_new.columns:
             unique_parts = get_unique_non_empty_values(df_bp_new['Part Name(CHN)'], 'Part Name(CHN)')
@@ -1724,11 +1745,14 @@ def process_bp_file(bp_filename, df_bom):
             "Перевод названий деталей", df_bp_new, saved_state
         )
         if continue_flag:
+            step_elapsed = time.time() - step_start
+            print(f"  [Время шага 5: {timedelta(seconds=int(step_elapsed))}]")
             break
         # retry - повторяем шаг 5
 
     # Шаг 6: Поиск официальных названий поставщиков
     while True:
+        step_start = time.time()
         print_step_header(6, 17, "Поиск официальных названий поставщиков")
         if 'Supplier Name' in df_bp_new.columns:
             unique_suppliers = get_unique_non_empty_values(df_bp_new['Supplier Name'], 'Supplier Name')
@@ -1748,11 +1772,14 @@ def process_bp_file(bp_filename, df_bom):
 
         continue_flag, df_bp_new, saved_state = confirm_step("Поиск официальных названий поставщиков", df_bp_new, saved_state)
         if continue_flag:
+            step_elapsed = time.time() - step_start
+            print(f"  [Время шага 6: {timedelta(seconds=int(step_elapsed))}]")
             break
         # retry - повторяем шаг 6
 
     # Шаг 7: Ввод статуса локализации поставщиков
     while True:
+        step_start = time.time()
         print_step_header(7, 17, "Ввод статуса локализации поставщиков")
         df_bp_new = get_supplier_localization_status(df_bp_new, bp_number)
         show_dataframe_preview(
@@ -1764,10 +1791,13 @@ def process_bp_file(bp_filename, df_bom):
             "Ввод статуса локализации поставщиков", df_bp_new, saved_state
         )
         if continue_flag:
+            step_elapsed = time.time() - step_start
+            print(f"  [Время шага 7: {timedelta(seconds=int(step_elapsed))}]")
             break
         # retry - повторяем шаг 7
 
     # Шаг 8: Фильтрация китайских символов
+    step_start = time.time()
     print_step_header(8, 17, "Фильтрация китайских символов")
     if 'Change Description' in df_bp_new.columns:
         df_bp_new['Change Description'] = df_bp_new['Change Description'].apply(filter_chinese_lines)
@@ -1775,9 +1805,12 @@ def process_bp_file(bp_filename, df_bom):
     if 'Solution' in df_bp_new.columns:
         df_bp_new['Solution'] = df_bp_new['Solution'].apply(filter_chinese_lines)
         print("  Колонка 'Solution': фильтрация выполнена")
+    step_elapsed = time.time() - step_start
+    print(f"  [Время шага 8: {timedelta(seconds=int(step_elapsed))}]")
 
     # Шаг 9: Перевод описания
     while True:
+        step_start = time.time()
         print_step_header(9, 17, "Перевод описания к изменению")
         if 'Change Description' in df_bp_new.columns:
             unique_descs = get_unique_non_empty_values(df_bp_new['Change Description'], 'Change Description')
@@ -1797,11 +1830,14 @@ def process_bp_file(bp_filename, df_bom):
 
         continue_flag, df_bp_new, saved_state = confirm_step("Перевод описания изменений", df_bp_new, saved_state)
         if continue_flag:
+            step_elapsed = time.time() - step_start
+            print(f"  [Время шага 9: {timedelta(seconds=int(step_elapsed))}]")
             break
         # retry - повторяем шаг 9
 
     # Шаг 10: Перевод решения
     while True:
+        step_start = time.time()
         print_step_header(10, 17, "Перевод решения к изменению")
         if 'Solution' in df_bp_new.columns:
             unique_sols = get_unique_non_empty_values(df_bp_new['Solution'], 'Solution')
@@ -1821,11 +1857,14 @@ def process_bp_file(bp_filename, df_bom):
 
         continue_flag, df_bp_new, saved_state = confirm_step("Перевод решения", df_bp_new, saved_state)
         if continue_flag:
+            step_elapsed = time.time() - step_start
+            print(f"  [Время шага 10: {timedelta(seconds=int(step_elapsed))}]")
             break
         # retry - повторяем шаг 10
 
     # Шаг 11: Обработка цветов и Color Code
     while True:
+        step_start = time.time()
         print_step_header(11, 17, "Обработка цветов и Color Code")
 
         if 'Color Name' in df_bp_new.columns:
@@ -1863,11 +1902,14 @@ def process_bp_file(bp_filename, df_bom):
 
         continue_flag, df_bp_new, saved_state = confirm_step("Обработка цветов и Color Code", df_bp_new, saved_state)
         if continue_flag:
+            step_elapsed = time.time() - step_start
+            print(f"  [Время шага 11: {timedelta(seconds=int(step_elapsed))}]")
             break
         # retry - повторяем шаг 11
 
     # Шаг 12: Обработка рабочих центров
     while True:
+        step_start = time.time()
         print_step_header(12, 17, "Обработка рабочих центров")
         if 'Workcenter Name' in df_bp_new.columns:
             df_bp_new['Workcenter Name'] = df_bp_new['Workcenter Name'].apply(extract_parentheses_content)
@@ -1886,11 +1928,14 @@ def process_bp_file(bp_filename, df_bom):
 
         continue_flag, df_bp_new, saved_state = confirm_step("Обработка рабочих центров", df_bp_new, saved_state)
         if continue_flag:
+            step_elapsed = time.time() - step_start
+            print(f"  [Время шага 12: {timedelta(seconds=int(step_elapsed))}]")
             break
         # retry - повторяем шаг 12
 
     # Шаг 13: Перевод требований по дальнешейму использованию или утилизации старых деталей
     while True:
+        step_start = time.time()
         print_step_header(13, 17, "Перевод требований по утилизации старых деталей")
         df_bp_new = translate_production_part_disposal(df_bp_new, bp_number)
         show_dataframe_preview(
@@ -1902,6 +1947,8 @@ def process_bp_file(bp_filename, df_bom):
             "Перевод по утилизации старых деталей", df_bp_new, saved_state
         )
         if continue_flag:
+            step_elapsed = time.time() - step_start
+            print(f"  [Время шага 13: {timedelta(seconds=int(step_elapsed))}]")
             break
         # retry - повторяем шаг 13
 
@@ -1918,11 +1965,14 @@ def process_bp_file(bp_filename, df_bom):
             "Перевод требований по взаимозаменяемости", df_bp_new, saved_state
         )
         if continue_flag:
+            step_elapsed = time.time() - step_start
+            print(f"  [Время шага 14: {timedelta(seconds=int(step_elapsed))}]")
             break
         # retry - повторяем шаг 14
 
     # Шаг 15: Проверка наличия в BOM
     while True:
+        step_start = time.time()
         print_step_header(15, 17, "Проверка наличия деталей в BOM")
         if df_bom is not None and 'BOM Product' in df_bp_new.columns and 'Part No.' in df_bp_new.columns:
             try:
@@ -1950,11 +2000,14 @@ def process_bp_file(bp_filename, df_bom):
 
         continue_flag, df_bp_new, saved_state = confirm_step("Проверка наличия в BOM", df_bp_new, saved_state)
         if continue_flag:
+            step_elapsed = time.time() - step_start
+            print(f"  [Время шага 15: {timedelta(seconds=int(step_elapsed))}]")
             break
         # retry - повторяем шаг 15
 
     # Шаг 16: Упорядочивание колонок
     while True:
+        step_start = time.time()
         print_step_header(16, 17, "Упорядочивание колонок")
         bp_columns_order = [
             'BP_No', 'Status', 'In Stock', 'New Part Available Date', 'BOM Product',
@@ -1979,16 +2032,28 @@ def process_bp_file(bp_filename, df_bom):
 
         continue_flag, df_bp_new, saved_state = confirm_step("Упорядочивание колонок", df_bp_new, saved_state)
         if continue_flag:
+            step_elapsed = time.time() - step_start
+            print(f"  [Время шага 16: {timedelta(seconds=int(step_elapsed))}]")
             break
         # retry - повторяем шаг 16
 
     # Шаг 17: Сохранение результата
+    step_start = time.time()
     print_step_header(17, 17, "Сохранение результата")
 
     bp_dataframe = {
         'bp_number': bp_number,
         'dataframe': df_bp_new,
+        'processing_time_seconds': time.time() - bp_start_time
     }
+
+    step_elapsed = time.time() - step_start
+    print(f"  [Время шага 17: {timedelta(seconds=int(step_elapsed))}]")
+
+    # Выводим итоговое время обработки BP
+    total_time = bp_dataframe['processing_time_seconds']
+    print(f"\n  [ИТОГО ВРЕМЯ ОБРАБОТКИ {bp_number}: {timedelta(seconds=int(total_time))}]")
+    print(f"  ({(total_time/60):.1f} минут)\n")
 
     return bp_dataframe
 
@@ -2125,7 +2190,7 @@ def main():
 
     if manual_input == 'да':
         print("\n  ИНСТРУКЦИЯ ПО ВВОДУ BP НОМЕРОВ:")
-        print("    1. Вводите номера BP в формате: BP26002813 (с префиксом 'BP')")
+        print("    1. Вводите номера BP в формате: BP<номер> (с префиксом 'BP')")
         print("    2. После ввода каждого номера нажмите Enter")
         print("    3. Для завершения ввода оставьте строку пустой и нажмите Enter")
         print("    4. Пример: BP12345")
@@ -2270,7 +2335,7 @@ def main():
 
         result = process_bp_file(bp_file, df_bom)
         if result:
-            bp_num = result['bp_number'] 
+            bp_num = result['bp_number']
             processed_results[result['bp_number']] = result['dataframe']
             # Сохранение бэкапа
             save_processed_bp(result['dataframe'], bp_num)
