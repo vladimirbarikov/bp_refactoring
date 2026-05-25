@@ -15,3 +15,10 @@ bp_venv/
 
 # python configuration
 .pylintrc
+
+# Build artifacts
+build/
+dist/
+
+# setup file
+*.exe
