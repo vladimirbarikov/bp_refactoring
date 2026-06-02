@@ -1151,18 +1151,22 @@ def batch_file_loader_for_single_bp(
 
     Функция:
         1. Показывает список всех BEFORE деталей перед обработкой
-        2. Запрашивает у пользователя имя файла упаковочного листа для Before деталей
-        3. Загружает файл и извлекает:
+        2. Обрабатывает ТОЛЬКО уникальные BEFORE детали (без дубликатов)
+        3. Автоматически копирует данные для дубликатов BEFORE деталей
+        4. Запрашивает у пользователя имя файла упаковочного листа для уникальных Before деталей
+        5. Загружает файл и извлекает:
             - Quantity per Box (количество деталей в коробке)
             - Box Size (размер коробки)
             - Pallet Size (размер паллеты)
-        4. Сравнивает BEFORE и AFTER детали, находит дубликаты (одинаковые Part No.)
-        5. Для AFTER деталей, совпадающих с BEFORE, автоматически копирует данные упаковки
-        6. Для уникальных AFTER деталей (с указанным Batch fact) запрашивает упаковочные листы
-        7. Показывает список всех уникальных AFTER деталей перед обработкой
+        6. Сравнивает BEFORE и AFTER детали, находит дубликаты (одинаковые Part No.)
+        7. Для AFTER деталей, совпадающих с BEFORE, автоматически копирует данные упаковки
+        8. Для уникальных AFTER деталей (с указанным Batch fact) запрашивает упаковочные листы
+        9. Показывает список всех уникальных AFTER деталей перед обработкой
 
     Аргументы:
         df_current (pd.DataFrame): Текущий DataFrame с данными BP.
+        bp_number (str): Номер BP для создания папки.
+        base_dir (Optional[str]): Базовая директория. По умолчанию None (используется текущая).
 
     Возвращается:
         pd.DataFrame: DataFrame с заполненными полями упаковки:
@@ -1197,7 +1201,7 @@ def batch_file_loader_for_single_bp(
     print("-" * 60)
     wait_for_user("\nНажмите Enter, чтобы начать загрузку упаковочных листов для BEFORE деталей...")
 
-    # === Обработка Before деталей ===
+    # === ОБРАБОТКА BEFORE ДЕТАЛЕЙ С УЧЁТОМ ДУБЛИКАТОВ ===
     print("\n[ОБРАБОТКА BEFORE ДЕТАЛЕЙ]")
     print("ИНСТРУКЦИЯ:")
     print("  1. Найдите номер партии в системе SCM по номеру детали")
@@ -1210,9 +1214,29 @@ def batch_file_loader_for_single_bp(
     # Словарь для хранения данных упаковки Before деталей (для возможного копирования в After)
     before_packaging_data = {}
 
-    for idx, part_no_before, part_name_before in before_parts:
-        print(f"\n  [{before_parts.index((idx, part_no_before, part_name_before)) + 1}/{len(before_parts)}] Деталь Before: {part_no_before}")
-        print(f"  Название: {part_name_before[:50] + '...' if len(part_name_before) > 50 else part_name_before}")
+    # Шаг 1: Выделяем уникальные BEFORE детали (без дубликатов)
+    unique_before_parts = {}  # part_no -> (first_idx, part_name)
+    duplicate_before_mapping = {}  # duplicate_idx -> original_part_no
+
+    for idx, part_no, part_name in before_parts:
+        if part_no not in unique_before_parts:
+            unique_before_parts[part_no] = (idx, part_name)
+        else:
+            duplicate_before_mapping[idx] = part_no
+
+    if duplicate_before_mapping:
+        print(f"\n  [ОБНАРУЖЕНЫ ДУБЛИКАТЫ BEFORE ДЕТАЛЕЙ: {len(duplicate_before_mapping)}]")
+        for dup_idx, orig_part in duplicate_before_mapping.items():
+            print(f"    • Деталь {orig_part} встречается несколько раз - будет обработана автоматически")
+    else:
+        print("\n  [ДУБЛИКАТОВ BEFORE ДЕТАЛЕЙ НЕ ОБНАРУЖЕНО]")
+
+    print(f"\n  УНИКАЛЬНЫХ BEFORE ДЕТАЛЕЙ ДЛЯ РУЧНОЙ ОБРАБОТКИ: {len(unique_before_parts)}")
+
+    # Шаг 2: Обрабатываем ТОЛЬКО уникальные BEFORE детали
+    for part_no, (first_idx, part_name) in unique_before_parts.items():
+        print(f"\n  Обработка уникальной детали Before: {part_no}")
+        print(f"  Название: {part_name[:50] + '...' if len(part_name) > 50 else part_name}")
 
         while True:
             # Защищённый ввод имени файла
@@ -1240,8 +1264,8 @@ def batch_file_loader_for_single_bp(
 
             if filename == '':
                 print("    → Пропущено. Данные будут заполнены позже в Excel.")
-                # Сохраняем пустые данные для этого Before детали
-                before_packaging_data[part_no_before] = {
+                # Сохраняем пустые данные для этой уникальной детали
+                before_packaging_data[part_no] = {
                     'quantity_per_box': 0.0,
                     'box_size': '',
                     'pallet_size': ''
@@ -1262,18 +1286,14 @@ def batch_file_loader_for_single_bp(
 
             if df_batch is not None:
                 # Извлекаем данные для детали
-                batch_data = extract_packaging_data(df_batch, part_no_before)
+                batch_data = extract_packaging_data(df_batch, part_no)
                 if batch_data:
                     qty_per_box = batch_data['parts_qty_box']
                     box_size = batch_data['box_size']
                     pallet_size = batch_data['pallet_size']
 
-                    df_result.at[idx, 'Quantity per Box Before'] = qty_per_box
-                    df_result.at[idx, 'Box Before (L-W-H) mm'] = box_size
-                    df_result.at[idx, 'Pallet Before (L-W-H) mm'] = pallet_size
-
-                    # Сохраняем данные для возможного копирования в After
-                    before_packaging_data[part_no_before] = {
+                    # Сохраняем данные для уникальной детали
+                    before_packaging_data[part_no] = {
                         'quantity_per_box': qty_per_box,
                         'box_size': box_size,
                         'pallet_size': pallet_size
@@ -1281,9 +1301,9 @@ def batch_file_loader_for_single_bp(
 
                     print(f"    → Данные загружены: Qty/Box={qty_per_box}, Box={box_size}, Pallet={pallet_size}")
                 else:
-                    print(f"    → Деталь {part_no_before} не найдена в файле {filename}")
+                    print(f"    → Деталь {part_no} не найдена в файле {filename}")
                     # Сохраняем пустые данные
-                    before_packaging_data[part_no_before] = {
+                    before_packaging_data[part_no] = {
                         'quantity_per_box': 0.0,
                         'box_size': '',
                         'pallet_size': ''
@@ -1323,13 +1343,35 @@ def batch_file_loader_for_single_bp(
                 if retry == 'нет':
                     print("    → Пропущено.")
                     # Сохраняем пустые данные
-                    before_packaging_data[part_no_before] = {
+                    before_packaging_data[part_no] = {
                         'quantity_per_box': 0.0,
                         'box_size': '',
                         'pallet_size': ''
                     }
                     break
                 # Если Enter или другое значение - продолжаем цикл (повторный ввод имени файла)
+
+    # Шаг 3: Заполняем данные для оригинальных индексов и дубликатов BEFORE деталей
+    print("\n[ЗАПОЛНЕНИЕ ДАННЫХ ДЛЯ BEFORE ДЕТАЛЕЙ]")
+    
+    # Заполняем для уникальных деталей (первые вхождения)
+    for part_no, (first_idx, _) in unique_before_parts.items():
+        if part_no in before_packaging_data:
+            data = before_packaging_data[part_no]
+            df_result.at[first_idx, 'Quantity per Box Before'] = data['quantity_per_box']
+            df_result.at[first_idx, 'Box Before (L-W-H) mm'] = data['box_size']
+            df_result.at[first_idx, 'Pallet Before (L-W-H) mm'] = data['pallet_size']
+    
+    # Заполняем для дубликатов (копируем данные из уникальных)
+    if duplicate_before_mapping:
+        print(f"  Копирование данных для {len(duplicate_before_mapping)} дубликатов BEFORE деталей...")
+        for dup_idx, original_part_no in duplicate_before_mapping.items():
+            if original_part_no in before_packaging_data:
+                data = before_packaging_data[original_part_no]
+                df_result.at[dup_idx, 'Quantity per Box Before'] = data['quantity_per_box']
+                df_result.at[dup_idx, 'Box Before (L-W-H) mm'] = data['box_size']
+                df_result.at[dup_idx, 'Pallet Before (L-W-H) mm'] = data['pallet_size']
+                print(f"    → Дубликат {original_part_no}: данные скопированы автоматически")
 
     # === АВТОМАТИЧЕСКОЕ КОПИРОВАНИЕ ДАННЫХ ДЛЯ AFTER ДЕТАЛЕЙ, СОВПАДАЮЩИХ С BEFORE ===
     print("\n" + "=" * 60)
@@ -1364,8 +1406,10 @@ def batch_file_loader_for_single_bp(
     print("\n" + "=" * 60)
     print("[СПИСОК УНИКАЛЬНЫХ AFTER ДЕТАЛЕЙ ДЛЯ РУЧНОЙ ОБРАБОТКИ]")
 
-    after_parts = []
-    skipped_duplicates = []
+    # Словарь для отслеживания уникальных AFTER деталей
+    unique_after_parts = {}  # part_no -> (idx, part_name, batch_fact)
+    duplicate_after_mapping = {}  # duplicate_idx -> original_part_no
+    skipped_duplicates = []  # детали, скопированные из BEFORE
 
     for idx, row in df_result.iterrows():
         part_no_after = safe_str_convert(row.get('Part No. After', ''))
@@ -1380,27 +1424,40 @@ def batch_file_loader_for_single_bp(
                     skipped_duplicates.append((part_no_after, part_name_after, batch_fact))
                     print(f"  Деталь After: {part_no_after} - СКОПИРОВАНА ИЗ BEFORE (пропущена ручная обработка)")
                 else:
-                    after_parts.append((idx, part_no_after, part_name_after, batch_fact))
-                    print(f"  {len(after_parts)}. Part No.: {part_no_after}")
-                    print(f"     Название: {part_name_after[:70] + '...' if len(part_name_after) > 70 else part_name_after}")
-                    print(f"     Batch fact: {batch_fact}")
+                    # Проверяем на дубликаты среди AFTER деталей
+                    if part_no_after not in unique_after_parts:
+                        unique_after_parts[part_no_after] = (idx, part_name_after, batch_fact)
+                        print(f"  {len(unique_after_parts)}. Part No.: {part_no_after}")
+                        print(f"     Название: {part_name_after[:70] + '...' if len(part_name_after) > 70 else part_name_after}")
+                        print(f"     Batch fact: {batch_fact}")
+                    else:
+                        duplicate_after_mapping[idx] = part_no_after
+                        print(f"  Деталь After: {part_no_after} - ДУБЛИКАТ (будет скопирован автоматически)")
             else:
                 print(f"  Деталь After: {part_no_after} - пропущена (не указан Batch fact)")
 
-    if skipped_duplicates:
-        print(f"\n  ПРОПУЩЕНО АВТОМАТИЧЕСКИ ОБРАБОТАННЫХ ДЕТАЛЕЙ: {len(skipped_duplicates)}")
+    if duplicate_after_mapping:
+        print(f"\n  [ОБНАРУЖЕНЫ ДУБЛИКАТЫ AFTER ДЕТАЛЕЙ: {len(duplicate_after_mapping)}]")
+        for dup_idx, orig_part in duplicate_after_mapping.items():
+            print(f"    • Деталь {orig_part} встречается несколько раз - будет обработана автоматически")
 
-    if not after_parts:
+    if skipped_duplicates:
+        print(f"\n  ПРОПУЩЕНО АВТОМАТИЧЕСКИ ОБРАБОТАННЫХ ДЕТАЛЕЙ (скопировано из BEFORE): {len(skipped_duplicates)}")
+
+    if not unique_after_parts:
         print("\n  НЕТ УНИКАЛЬНЫХ AFTER деталей для ручной обработки (все скопированы из BEFORE или нет Batch fact).")
     else:
-        print(f"\n  ВСЕГО УНИКАЛЬНЫХ AFTER ДЕТАЛЕЙ ДЛЯ РУЧНОЙ ОБРАБОТКИ: {len(after_parts)}")
+        print(f"\n  ВСЕГО УНИКАЛЬНЫХ AFTER ДЕТАЛЕЙ ДЛЯ РУЧНОЙ ОБРАБОТКИ: {len(unique_after_parts)}")
 
     print("-" * 60)
 
-    if after_parts:
+    # === ОБРАБОТКА УНИКАЛЬНЫХ AFTER ДЕТАЛЕЙ ===
+    if unique_after_parts:
         wait_for_user("\nНажмите Enter, чтобы начать загрузку упаковочных листов для UNIQUE AFTER деталей...")
 
-        # === Обработка уникальных After деталей (только те, что не были скопированы) ===
+        # Словарь для хранения данных упаковки AFTER деталей
+        after_packaging_data = {}
+
         print("\n[ОБРАБОТКА UNIQUE AFTER ДЕТАЛЕЙ]")
         print("ИНСТРУКЦИЯ:")
         print("  1. Найдите в папке упаковочный лист (Excel файл) для партии указанной в колонке 'Batch fact'")
@@ -1409,9 +1466,10 @@ def batch_file_loader_for_single_bp(
         print("  4. Введите имя файла для загрузки данных (или Enter чтобы пропустить)")
         print("-" * 60)
 
-        for i, (idx, part_no_after, part_name_after, batch_fact) in enumerate(after_parts, 1):
-            print(f"\n  [{i}/{len(after_parts)}] Деталь After: {part_no_after}")
-            print(f"  Название: {part_name_after[:50] + '...' if len(part_name_after) > 50 else part_name_after}")
+        # Обрабатываем ТОЛЬКО уникальные AFTER детали
+        for i, (part_no, (first_idx, part_name, batch_fact)) in enumerate(unique_after_parts.items(), 1):
+            print(f"\n  [{i}/{len(unique_after_parts)}] Уникальная деталь After: {part_no}")
+            print(f"  Название: {part_name[:50] + '...' if len(part_name) > 50 else part_name}")
             print(f"  Batch fact: {batch_fact}")
 
             while True:
@@ -1440,6 +1498,12 @@ def batch_file_loader_for_single_bp(
 
                 if filename == '':
                     print("    → Пропущено. Данные будут заполнены позже в Excel.")
+                    # Сохраняем пустые данные
+                    after_packaging_data[part_no] = {
+                        'quantity_per_box': 0.0,
+                        'box_size': '',
+                        'pallet_size': ''
+                    }
                     break
 
                 if base_dir is None:
@@ -1456,14 +1520,22 @@ def batch_file_loader_for_single_bp(
 
                 if df_batch is not None:
                     # Извлекаем данные для детали
-                    batch_data = extract_packaging_data(df_batch, part_no_after)
+                    batch_data = extract_packaging_data(df_batch, part_no)
                     if batch_data:
-                        df_result.at[idx, 'Quantity per Box After'] = batch_data['parts_qty_box']
-                        df_result.at[idx, 'Box After (L-W-H) mm'] = batch_data['box_size']
-                        df_result.at[idx, 'Pallet After (L-W-H) mm'] = batch_data['pallet_size']
+                        after_packaging_data[part_no] = {
+                            'quantity_per_box': batch_data['parts_qty_box'],
+                            'box_size': batch_data['box_size'],
+                            'pallet_size': batch_data['pallet_size']
+                        }
                         print(f"    → Данные загружены: Qty/Box={batch_data['parts_qty_box']}, Box={batch_data['box_size']}, Pallet={batch_data['pallet_size']}")
                     else:
-                        print(f"    → Деталь {part_no_after} не найдена в файле {filename}")
+                        print(f"    → Деталь {part_no} не найдена в файле {filename}")
+                        # Сохраняем пустые данные
+                        after_packaging_data[part_no] = {
+                            'quantity_per_box': 0.0,
+                            'box_size': '',
+                            'pallet_size': ''
+                        }
                     break
                 else:
                     print("    → Файл не найден. Проверьте имя файла и попробуйте снова.")
@@ -1498,11 +1570,40 @@ def batch_file_loader_for_single_bp(
 
                     if retry == 'нет':
                         print("    → Пропущено.")
+                        # Сохраняем пустые данные
+                        after_packaging_data[part_no] = {
+                            'quantity_per_box': 0.0,
+                            'box_size': '',
+                            'pallet_size': ''
+                        }
                         break
                     # Если Enter или другое значение - продолжаем цикл (повторный ввод имени файла)
+
+        # Заполняем данные для уникальных и дубликатов AFTER деталей
+        print("\n[ЗАПОЛНЕНИЕ ДАННЫХ ДЛЯ AFTER ДЕТАЛЕЙ]")
+        
+        # Заполняем для уникальных деталей (первые вхождения)
+        for part_no, (first_idx, _, _) in unique_after_parts.items():
+            if part_no in after_packaging_data:
+                data = after_packaging_data[part_no]
+                df_result.at[first_idx, 'Quantity per Box After'] = data['quantity_per_box']
+                df_result.at[first_idx, 'Box After (L-W-H) mm'] = data['box_size']
+                df_result.at[first_idx, 'Pallet After (L-W-H) mm'] = data['pallet_size']
+        
+        # Заполняем для дубликатов AFTER деталей
+        if duplicate_after_mapping:
+            print(f"  Копирование данных для {len(duplicate_after_mapping)} дубликатов AFTER деталей...")
+            for dup_idx, original_part_no in duplicate_after_mapping.items():
+                if original_part_no in after_packaging_data:
+                    data = after_packaging_data[original_part_no]
+                    df_result.at[dup_idx, 'Quantity per Box After'] = data['quantity_per_box']
+                    df_result.at[dup_idx, 'Box After (L-W-H) mm'] = data['box_size']
+                    df_result.at[dup_idx, 'Pallet After (L-W-H) mm'] = data['pallet_size']
+                    print(f"    → Дубликат {original_part_no}: данные скопированы автоматически")
+
     else:
         print("\n[ОБРАБОТКА AFTER ДЕТАЛЕЙ ПРОПУЩЕНА]")
-        print("Все AFTER детали либо скопированы из BEFORE, либо не имеют Batch fact.")
+        print("Все AFTER детали либо скопированы из BEFORE, либо не имеют Batch fact, либо являются дубликатами.")
 
     print("\n" + "=" * 60)
     print("Завершена загрузка файлов партий.")
