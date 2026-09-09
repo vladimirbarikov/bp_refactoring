@@ -1172,106 +1172,83 @@ def save_processed_dataframe(
     file_prefix: str = 'breakpoint_data',
     column_translation: Optional[List[str]] = None,
     int_columns: Optional[List[str]] = None,
-    datetime_columns: Optional[List[str]] = None
+    datetime_columns: Optional[List[str]] = None,
+    force_separate: bool = False
 ) -> Optional[str]:
     """
-    Универсально сохраняет обработанный DataFrame с объединением с существующими данными
-    в индивидуальную подпапку с датой по структуре:
+    Универсально сохраняет обработанный DataFrame с возможностью объединения 
+    с существующими историческими данными в структурированную директорию:
     output_files/output_breakpoint_data_files/YYYY-MM-DD_{file_prefix}/
 
     Аргументы:
-        df_new_data (pd.DataFrame):          Новый DataFrame для сохранения.
+        df_new_data (pd.DataFrame):          Новый датафрейм с очищенными данными для экспорта.
         file_prefix (str):                   Префикс имени файла для поиска истории и сохранения.
-        column_translation (list, optional): Русские переводы заголовков.
-        int_columns (list, optional):        Колонки для приведения к целым числам при нормализации.
-        datetime_columns (list, optional):   Колонки для приведения к датам при нормализации.
+                                             По умолчанию 'breakpoint_data'.
+        column_translation (list, optional): Список русских переводов заголовков для третьей строки Excel.
+        int_columns (list, optional):        Список колонок для принудительного приведения к типу int64.
+        datetime_columns (list, optional):   Список колонок для нормализации к текстовому формату даты YYYY-MM-DD.
+        force_separate (bool):               Флаг принудительной записи данных в изолированный новый файл 
+                                             без слияния с историей. По умолчанию False.
 
     Возвращается:
-        Optional[str]: Имя сохранённого файла или None при ошибке.
+        Optional[str]: 
+            - Полный путь к успешно сохранённому файлу Excel (str).
+            - Строковый маркер "STRUCTURE_MISMATCH", если обнаружено несовпадение колонок 
+              между новыми и историческими данными (требуется реакция вызывающего уровня).
+            - None при возникновении критической ошибки записи или отсутствии данных.
     """
-    # Список русских переводов колонок (должен соответствовать порядку колонок в df_new_data)
+    # Инициализация параметров и путей
     translations = column_translation or []
-
-    # Задаем жесткий целевой путь согласно структуре папок проекта
     target_root = os.path.join('output_files', 'output_breakpoint_data_files')
-
-    # Формируем имя индивидуальной папки (например: '2026-09-09_breakpoint_data')
     today_str = datetime.now().strftime('%Y-%m-%d')
-    output_folder_name = f"{today_str}_{file_prefix}"
-    target_dir = os.path.join(target_root, output_folder_name)
+    target_dir = os.path.join(target_root, f"{today_str}_{file_prefix}")
 
-    # Проверяем и создаем всю цепочку директорий
+    # Гарантируем существование целевой директории
     if not os.path.exists(target_dir):
-        os.makedirs(target_dir)
-        print(f"  [Экспорт] Создана директория для сохранения отчета: {target_dir}")
+        try:
+            os.makedirs(target_dir)
+            print(f"  [Экспорт] Создана директория для сохранения отчета: {target_dir}")
+        except OSError as e:
+            print(f"  [ОШИБКА] Не удалось создать директорию {target_dir}: {e}")
+            return None
 
-    # Загружаем существующий файл
+    # Попытка загрузки последней доступной истории для слияния
     df_existing = read_latest_excel_file(file_prefix, file_path='input_files/input_breakpoint_data_files')
+    df_combined = df_new_data
 
-    # Объединяем данные
-    if df_existing is not None and not df_existing.empty:
-        print(f"  Объединение: {len(df_existing)} существующих строк + {len(df_new_data)} новых строк")
+    # Сценарий 1: Принудительное сохранение в отдельный файл по требованию сверху
+    if force_separate:
+        print("  [Экспорт] Запущено изолированное сохранение по требованию бизнес-логики.")
+        filename = f"{today_str}_{file_prefix}_new.xlsx"
+        full_output_path = os.path.join(target_dir, filename)
 
-        # Проверяем совпадение колонок
+        success = save_excel_with_formatting(df_new_data, full_output_path, russian_headers=translations)
+        return full_output_path if success else None
+
+    # Сценарий 2: Попытка объединения с существующей историей
+    if isinstance(df_existing, pd.DataFrame) and not df_existing.empty:
+        print(f"  [Экспорт] Обнаружен исторический файл. Слияние: {len(df_existing)} строк + {len(df_new_data)} новых строк")
+
+        # Теперь здесь нет ошибок: анализатор знает, что columns существует
         if list(df_existing.columns) != list(df_new_data.columns):
-            print("  ВНИМАНИЕ: Структура колонок не совпадает!")
-            while True:
-                try:
-                    proceed = input("  Продолжить объединение? (да/нет): ").strip().lower()
-                    if proceed in ('да', 'нет'):
-                        break
-                    print("  Некорректный ввод. Пожалуйста, введите 'да' или 'нет'.")
-                except KeyboardInterrupt:
-                    print()
-                    while True:
-                        try:
-                            confirm_word = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
-                            if confirm_word == 'да':
-                                print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-                                sys.exit(0)
-                            elif confirm_word == 'нет':
-                                print("\nПродолжаем работу...")
-                                break
-                            else:
-                                print("Пожалуйста, введите 'да' или 'нет'")
-                        except KeyboardInterrupt:
-                            print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-                            sys.exit(0)
-                    continue
-
-            if proceed != 'да':
-                print("  Объединение отменено. Новые данные будут сохранены в отдельный файл.")
-                filename = f"{today_str}_{file_prefix}_new.xlsx"
-
-                # Полный путь для сохранения раздельного файла в новую папку
-                full_output_path = os.path.join(target_dir, filename)
-                print(f"  Сохранение нового файла: {full_output_path}")
-                success = save_excel_with_formatting(df_new_data, full_output_path, russian_headers=translations)
-                return full_output_path if success else None
+            print("  [Экспорт] ВНИМАНИЕ: Обнаружено критическое несовпадение структуры колонок.")
+            return "STRUCTURE_MISMATCH"
 
         df_combined = pd.concat([df_existing, df_new_data], ignore_index=True)
-        print(f"  Итого строк после объединения: {len(df_combined)}")
-
+        print(f"  [Экспорт] Данные успешно объединены. Итого строк к нормализации: {len(df_combined)}")
     else:
-        df_combined = df_new_data
-        print(f"  Создаётся новый файл с {len(df_combined)} строками")
+        # Сюда программа зайдет, если df_existing равен None (файла нет) или пустой
+        print(f"  [Экспорт] История не найдена или пуста. Формируется новый отчет с {len(df_combined)} строками")
 
-    # Нормализуем объединенные даные
-    print("\n  Выполняется нормализация объединённых данных...")
+    # Техническая очистка и нормализация объединенного массива
+    print("  [Экспорт] Выполняется нормализация типов объединённого массива данных...")
     df_combined = normalize_data(df_combined, int_columns=int_columns, datetime_columns=datetime_columns)
 
-    # Имя объединенного файла (например: '2026-09-09_breakpoint_data.xlsx')
+    # Стандартное сохранение финального файла отчета
     filename = f"{today_str}_{file_prefix}.xlsx"
-
-    # Полный путь для сохранения объединенного файла
     full_output_path = os.path.join(target_dir, filename)
 
-    print(f"\n  Сохранение объединенного файла: {full_output_path}")
+    print(f"  [Экспорт] Сохранение файла Excel с форматированием: {full_output_path}")
     success = save_excel_with_formatting(df_combined, full_output_path, russian_headers=translations)
 
-    if success:
-        print(f"\n  Файл успешно сохранён: {filename}")
-        return full_output_path
-    else:
-        print("\n  Ошибка при сохранении файла!")
-        return None
+    return full_output_path if success else None
