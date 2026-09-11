@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 # pylint: disable=line-too-long
 # pylint: disable=too-many-lines
+# pylint: disable=import-outside-toplevel
 """
 Модуль инженерных ETL-инструментов нижнего уровня (Extract, Transform, Load).
 
@@ -926,7 +927,7 @@ def detect_columns_by_data(
 # 6. СОХРАНЕНИЕ ДАННЫХ (Data Export)
 # ====================================================================
 
-def save_processed_bp(
+def save_backup(
     df: pd.DataFrame,
     bp_number: str
 ) -> str:
@@ -1018,17 +1019,10 @@ def save_excel_with_formatting(
     Возвращается:
         bool: True если сохранение успешно, False при ошибке
     """
-    colors = theme_colors or {
-        'warehouse_bg': '#FDE9D9',
-        'warehouse_text': 'black',
-        'header_bg': '#0F243E',
-        'header_text': 'white',
-        'data_bg': '#FFFFFF'
-    }
+    from py_lib.config.core import EXCEL_COLUMN_WIDTHS, EXCEL_THEME_COLORS
 
-    widths  = column_width or {
-        i: 25 for i in range(len(df_new_data.columns))
-    }
+    colors = theme_colors or EXCEL_THEME_COLORS
+    widths = column_width or EXCEL_COLUMN_WIDTHS
 
     # Защита от любых NaN/Inf
     df_new_data = df_new_data.replace([np.nan, np.inf, -np.inf], 0)
@@ -1041,58 +1035,59 @@ def save_excel_with_formatting(
             # === Собираем динамические форматы на основе конфига цветов ===
             warehouse_merged_format = workbook.add_format({
                 'font_name': 'Arial', 'font_size': 10, 'bold': True,
-                'font_color': colors['warehouse_text'], 
-                'bg_color': colors['warehouse_bg'],
+                'font_color': colors.get('warehouse_text', 'black'), 
+                'bg_color': colors.get('warehouse_bg', '#FDE9D9'),
                 'valign': 'vcenter', 'align': 'center', 'text_wrap': True, 'border': 1
             })
 
             header_format = workbook.add_format({
                 'font_name': 'Arial', 'font_size': 10, 'bold': True,
-                'font_color': colors['header_text'], 
-                'bg_color': colors['header_bg'],
+                'font_color': colors.get('header_text', 'white'), 
+                'bg_color': colors.get('header_bg', '#0F243E'),
                 'valign': 'center', 'align': 'center', 'text_wrap': True, 'border': 1
             })
 
             data_format = workbook.add_format({
                 'font_name': 'Arial', 'font_size': 10, 
-                'font_color': 'black', 'bg_color': colors['data_bg'], 
+                'font_color': 'black', 'bg_color': colors.get('data_bg', '#FFFFFF'), 
                 'valign': 'top'
             })
 
             columns_e_p_format = workbook.add_format({
                 'font_name': 'Arial', 'font_size': 10, 'font_color': 'black',
-                'bg_color': colors['warehouse_bg'], 'valign': 'top'
+                'bg_color': colors.get('warehouse_bg', '#FDE9D9'), 'valign': 'top'
             })
 
             columns_ac_ad_format = workbook.add_format({
                 'font_name': 'Arial', 'font_size': 10, 'font_color': 'black',
-                'bg_color': colors['warehouse_bg'], 'valign': 'top'
+                'bg_color': colors.get('warehouse_bg', '#FDE9D9'), 'valign': 'top'
             })
 
             wrap_format = workbook.add_format({
                 'font_name': 'Arial', 'font_size': 10, 'font_color': 'black',
-                'bg_color': colors['data_bg'], 'text_wrap': True, 'valign': 'top'
+                'bg_color': colors.get('data_bg', '#FFFFFF'), 'text_wrap': True, 'valign': 'top'
             })
 
             wrap_e_p_format = workbook.add_format({
                 'font_name': 'Arial', 'font_size': 10, 'font_color': 'black',
-                'bg_color': colors['warehouse_bg'], 'text_wrap': True, 'valign': 'top'
+                'bg_color': colors.get('warehouse_bg', '#FDE9D9'), 'text_wrap': True, 'valign': 'top'
             })
 
             wrap_ac_ad_format = workbook.add_format({
                 'font_name': 'Arial', 'font_size': 10, 'font_color': 'black',
-                'bg_color': colors['warehouse_bg'], 'text_wrap': True, 'valign': 'top'
+                'bg_color': colors.get('warehouse_bg', '#FDE9D9'), 'text_wrap': True, 'valign': 'top'
             })
 
             columns_wrap_format = workbook.add_format({
                 'font_name': 'Arial', 'font_size': 10, 'font_color': 'black',
-                'bg_color': colors['data_bg'], 'text_wrap': True, 'valign': 'top'
+                'bg_color': colors.get('data_bg', '#FFFFFF'), 'text_wrap': True, 'valign': 'top'
             })
 
-            # === Настройка ширины колонок из конфига ===
-            for col_num, width in widths.items():
-                if col_num < len(df_new_data.columns):
-                    worksheet.set_column(col_num, col_num, width)
+            # === Настройка ширины колонок из конфигурации ===
+            # Если для колонки нет явного правила в EXCEL_COLUMN_WIDTHS, задаем стандартные 25
+            for col_num in range(len(df_new_data.columns)):
+                width = widths.get(col_num, 25)
+                worksheet.set_column(col_num, col_num, width)
 
             columns_e_p_indices = list(range(4, 16))
             columns_ac_ad_indices = [28, 29]
@@ -1105,7 +1100,8 @@ def save_excel_with_formatting(
                 worksheet.merge_range(0, 28, 0, 29, "ДЛЯ КЛАДОВЩИКОВ", warehouse_merged_format)
 
             for col_num in range(len(df_new_data.columns)):
-                if col_num in range(4, 16) or col_num in [28, 29]:
+                # Пропускаем индексы из диапазонов 4..15 и 28..29, так как они объединены
+                if col_num in columns_e_p_indices or col_num in columns_ac_ad_indices:
                     continue
                 worksheet.write(0, col_num, '')
 
