@@ -60,6 +60,126 @@ from openpyxl.utils.exceptions import InvalidFileException
 
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
+def user_input_for_single_bp(
+    df_current: pd.DataFrame,
+    bp_number: str
+) -> pd.DataFrame:
+    """
+    Запрашивает у пользователя ввод общих данных (Batch fact, Change Date) для всего BP.
+
+    Аргументы:
+        df_current (pd.DataFrame): Текущий DataFrame для обработки.
+        bp_number (str):           Номер обрабатываемого бизнес-процесса.
+
+    Возвращается:
+        pd.DataFrame: Копия DataFrame с заполненными общими данными.
+    """
+    print(f"\n--- Ввод данных для {bp_number} ---")
+    print(f"Всего строк для обработки: {len(df_current)}")
+
+    df_result = df_current.copy()
+    print("\nВведите общие данные для всего технического изменения:")
+
+    # Безопасное извлечение текущих значений с помощью str_convert из etl.py
+    has_rows = len(df_result) > 0
+    current_batch_fact = str_convert(df_result['Batch fact'].iloc[0]) if has_rows and 'Batch fact' in df_result.columns else ''
+    current_change_date = str_convert(df_result['Change Date'].iloc[0]) if has_rows and 'Change Date' in df_result.columns else ''
+
+    # Ввод для Batch fact
+    print(f"Текущее Batch fact: {current_batch_fact if current_batch_fact else '(пусто)'}")
+    while True:
+        try:
+            batch_fact_input = input("Введите Batch fact (или Enter, чтобы оставить пустым): ").strip()
+            break
+        except KeyboardInterrupt:
+            _handle_interrupt()
+
+    # Ввод для Change Date
+    print(f"Текущее Change Date: {current_change_date if current_change_date else '(пусто)'}")
+    while True:
+        try:
+            change_date_input = input("Введите Change Date (ГГГГ-ММ-ДД или Enter, чтобы оставить пустым): ").strip()
+            break
+        except KeyboardInterrupt:
+            _handle_interrupt()
+
+    # Применение введенных данных к массиву
+    if batch_fact_input:
+        df_result['Batch fact'] = batch_fact_input
+        print(f"  Batch fact '{batch_fact_input}' применён ко всем {len(df_result)} строкам")
+
+    if change_date_input:
+        df_result['Change Date'] = change_date_input
+        print(f"  Change Date '{change_date_input}' применён ко всем {len(df_result)} строкам")
+
+    if not batch_fact_input and not change_date_input:
+        print("  Данные не введены. Будут заполнены позже в Excel.")
+
+    return df_result
+
+
+def interactive_translation(
+    data: List[str],
+    field_name: str,
+    examples: Optional[Dict[str, str]] = None
+) -> Dict[str, str]:
+    """
+    Интерактивный ввод переводов для списка уникальных значений.
+
+    Аргументы:
+        data (list): Список уникальных значений для перевода.
+        field_name (str): Название поля для вывода (например, "названий деталей").
+        examples (dict, optional): Словарь примеров переводов для отображения.
+
+    Возвращается:
+        Dict[str, str]: Словарь соответствий {оригинал: перевод}.
+    """
+    if not data:
+        return {}
+
+    translations: Dict[str, str] = {}
+
+    print(f"\nПеревод {field_name}:")
+    print(f"Найдено {len(data)} уникальных значений")
+
+    if examples:
+        print("Примеры переводов (можно использовать как шаблон):")
+        for ch, ru in examples.items():
+            print(f"     {ch[:50]}... → {ru[:50]}...")
+
+    print("\nСписок всех уникальных значений:\n" + "-" * 60)
+    for i, value in enumerate(data, 1):
+        print(f"  {i}. {value}")
+    print("-" * 60 + "\n\nИнструкция:")
+    print("  • Введите перевод и нажмите Enter → оригинальный текст будет заменён на перевод")
+    print("  • Нажмите Enter без перевода → текст останется оригинальным (без изменений)")
+
+    for i, value in enumerate(data, 1):
+        if pd.isna(value) or value == '':
+            translations[value] = value
+            continue
+
+        print(f"\n[{i}/{len(data)}] Оригинал: {value}")
+        while True:
+            try:
+                user_input = input("Введите перевод (или просто Enter чтобы оставить оригинал): ").strip()
+                break
+            except KeyboardInterrupt:
+                _handle_interrupt()
+            except EOFError:
+                print("\n\nКонец ввода. Программа завершена.")
+                sys.exit(0)
+
+        if user_input == '':
+            translations[value] = value
+            print(f"  → Оставляем оригинал: {value}")
+        else:
+            translations[value] = user_input
+            print(f"  → Заменяем на: {user_input}")
+
+    return translations
+
+
 def clean_surrogates(text):
     """
     Удаляет суррогатные символы Unicode из строки.
@@ -255,69 +375,6 @@ def safe_date_convert(
         return default
 
 
-def wait_for_user(prompt="\nНажмите Enter для продолжения..."):
-    """
-    Ожидает нажатия клавиши Enter от пользователя.
-
-    Аргументы:
-        prompt (str): Текст приглашения к вводу. По умолчанию содержит инструкцию.
-
-    Обрабатывается:
-        - KeyboardInterrupt (Ctrl+C) - запрашивает подтверждение перед завершением
-        - EOFError - завершает программу при обнаружении конца ввода
-    """
-    while True:  # Цикл для повторной попытки ввода
-        try:
-            user_input = input(prompt)
-            return user_input
-        except KeyboardInterrupt:
-            print()  # Переход на новую строку
-            while True:
-                confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
-                if confirm == 'да':
-                    print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-                    sys.exit(0)
-                elif confirm == 'нет':
-                    print("\nПродолжаем работу...")
-                    break  # Выходим из внутреннего цикла и продолжаем внешний
-                else:
-                    print("Пожалуйста, введите 'да' или 'нет'")
-            # После break из внутреннего цикла, продолжаем внешний цикл
-            continue
-        except EOFError:
-            print("\n\nОбнаружен конец ввода. Программа завершена.")
-            sys.exit(0)
-
-
-def print_step_header(step_num, total_steps, description):
-    """
-    Выводит форматированный заголовок шага обработки.
-
-    Аргументы:
-        step_num (int): Номер текущего шага.
-        total_steps (int): Общее количество шагов.
-        description (str): Описание шага.
-    """
-    print("\n" + "=" * 60)
-    print(f"ШАГ {step_num}/{total_steps}: {description}")
-    print("=" * 60)
-
-
-def save_state_before_step(df):
-    """
-    Сохраняет состояние DataFrame перед выполнением шага для возможности отката.
-
-    Аргументы:
-        df (pd.DataFrame): DataFrame для сохранения.
-
-    Возвращается:
-        pd.DataFrame: Глубокая копия DataFrame или None, если df=None.
-    """
-    if df is not None:
-        print("  [Сохранено состояние перед шагом]")
-        return df.copy(deep=True)
-    return None
-
 
 def restore_state(saved_df, step_name):
     """
@@ -394,7 +451,13 @@ def load_excel_file(filename, description="файл"):
         return None
 
 
-def show_dataframe_preview(df, step_name, max_rows=10, focus_columns=None, max_colwidth=40):
+def show_dataframe_preview(
+    df,
+    step_name,
+    max_rows=10,
+    focus_columns=None,
+    max_colwidth=40
+):
     """
     Отображает первые строки DataFrame для визуального контроля результатов шага.
     Пустые значения (NaN, None) показываются как пустая ячейка.
