@@ -2,1649 +2,1044 @@
 # -*- coding: utf-8 -*-
 # pylint: disable=line-too-long
 # pylint: disable=too-many-lines
+# pylint: disable=import-outside-toplevel
 """
-BP Refactoring Tool - Пошаговая обработка Excel файлов
+BP Refactoring Tool - Пошаговая обработка технических изменений Breakpoint (BP) автокомпонентов.
 
-Этот модуль отвечает за загрузку и обработку индивидуальных Excel файлов
+Модуль является чистой библиотекой пайплайна обработки одного BP-файла.
+Точка входа приложения (оркестрация сессии) находится в корневом main.py,
+который импортирует из этого модуля функцию process_bp_file().
 
-Breakpoint (BP). Он выполняет 18 последовательных шагов обработки:
-    1. Загрузка BP файла
-    2. Выбор нужных колонок
-    3. Выбор статуса тех. изменения
-    4. Заполнение пустых значений
-    5. Ввод количества деталей в SS
-    6. Перевод названий деталей
-    7. Поиск официальных названий поставщиков
-    8. Ввод статуса локализации поставщиков
-    9. Фильтрация китайских символов в описании и решении
-    10. Перевод описания к изменению
-    11. Перевод решения к изменению
-    12. Обработка цветов и Color Code
-    13. Обработка рабочих центров
-    14. Перевод требований по утилизации старых деталей
-    15. Перевод требований по взаимозаменяемости
-    16. Проверка наличия деталей в BOM
-    17. Упорядочивание колонок
-    18. Сохранение результата
+Основная функция модуля:
+    process_bp_file(bp_filename) -> Optional[Dict[str, Any]]
+
+Она выполняет 25 последовательных шагов обработки одного BP<номер>.xlsx:
+    ШАГ 1: ЗАГРУЗКА, АУДИТ И НОРМАЛИЗАЦИЯ ДАННЫХ (BP<номер>.xlsx)
+    ШАГ 2: РАЗДЕЛЕНИЕ ДЕТАЛЕЙ НА СТАРЫЕ И НОВЫЕ (BEFORE / AFTER)
+    ШАГ 3: ОПРЕДЕЛЕНИЕ СТАТУСА (Status)
+    ШАГ 4: ОПРЕДЕЛЕНИЕ НАЗВАНИЙ МОДЕЛЕЙ ПО КОДАМ (BOM Product Code -> BOM Product Name)
+    ШАГ 5: ВВОД ФАКТИЧЕСКОЙ ПАРТИИ (Batch Fact)
+    ШАГ 6: ВВОД ФАКТИЧЕСКОЙ ДАТЫ (Change Date)
+    ШАГ 7: ВВОД КОЛИЧЕСТВА BEFORE-ДЕТАЛЕЙ В SAFETY STOCK (Quantity Parts in SS)
+    ШАГ 8: ПЕРЕВОД НАЗВАНИЙ ДЕТАЛЕЙ (Part Name Before / After)
+    ШАГ 9: ПЕРЕВОД ОФИЦИАЛЬНЫХ НАЗВАНИЙ ПОСТАВЩИКОВ (Supplier Name Before / After)
+    ШАГ 10: ВВОД СТАТУСА ЛОКАЛИЗАЦИИ ПОСТАВЩИКОВ (Localization Before / After)
+    ШАГ 11: ВВОД ДАННЫХ О МЕСТОПОЛОЖЕНИИ BEFORE-ПОСТАВЩИКОВ
+    ШАГ 12: ВВОД ДАННЫХ О МЕСТОПОЛОЖЕНИИ AFTER-ПОСТАВЩИКОВ
+    ШАГ 13: ПЕРЕВОД ОПИСАНИЯ К ИЗМЕНЕНИЮ (Change Description)
+    ШАГ 14: ПЕРЕВОД РЕШЕНИЯ К ИЗМЕНЕНИЮ (Change Solution)
+    ШАГ 15: ПЕРЕВОД ЦВЕТА (Color Code и Color Name)
+    ШАГ 16: ОБРАБОТКА ЦЕХОВ И РАБОЧИХ СТАНЦИЙ (Workshop/Workcenter Code/Name Before/After)
+    ШАГ 17: ПЕРЕВОД ТРЕБОВАНИЙ ПО УТИЛИЗАЦИИ СТАРЫХ ДЕТАЛЕЙ (Production Part Disposal)
+    ШАГ 18: ПЕРЕВОД ТРЕБОВАНИЙ ПО ВЗАИМОЗАМЕНЯЕМОСТИ (Interchangeable)
+    ШАГ 19: ЗАГРУЗКА КОНФИГУРАЦИОННОГО ФАЙЛА (YYYY-mm-dd_configuration.xlsx)
+    ШАГ 20: РАСЧЁТ ПАРТИЙ В SAFETY STOCK (Quantity Batches in SS)
+    ШАГ 21: ПОИСК КОНФИГУРАЦИИ ДЛЯ УТИЛИЗАЦИИ BEFORE-ДЕТАЛЕЙ
+    ШАГ 22: ПОИСК УПАКОВОЧНЫХ ДАННЫХ ДЛЯ BEFORE-ДЕТАЛЕЙ
+    ШАГ 23: ПОИСК УПАКОВОЧНЫХ ДАННЫХ ДЛЯ AFTER-ДЕТАЛЕЙ
+    ШАГ 24: УПОРЯДОЧИВАНИЕ КОЛОНОК
+    ШАГ 25: СОХРАНЕНИЕ РЕЗУЛЬТАТА
 
 Каждый шаг включает:
-    - Интерактивное взаимодействие с пользователем для ввода переводов
+    - Интерактивное взаимодействие с пользователем для ввода данных
     - Возможность отменить изменения и повторить шаг (режим retry)
     - Сохранение состояния перед каждым шагом для возможности восстановления
 
-Модуль также содержит логику определения новых BP через сравнение
-с existing breakpoint_data и bp_list_2025-2026.xlsx.
+Экспортируемые функции:
+    - process_bp_file()                  — полный 25-шаговый пайплайн одного BP
+    - load_configuration_file()          — ленивая загрузка configuration.xlsx (кэш)
+    - get_bp_status()                    — интерактивный ввод статуса
+    - get_batch_fact()                   — интерактивный ввод Batch Fact
+    - get_change_date()                  — интерактивный ввод Change Date
+    - get_quantity_in_ss()               — интерактивный ввод остатков в Safety Stock
+    - get_translation()                  — интерактивный ввод переводов
+    - get_supplier_localization_status() — интерактивный ввод локализации
+    - get_supplier_location_data()       — интерактивный ввод местоположения
+    - detect_workshop_by_code()          — определение цеха по коду воркцентра
+    - load_packing_list_file()           — загрузка упаковочного листа
+    - parse_dimensions()                 — парсинг строки размера
+    - collect_unique_parts()             — сбор уникальных деталей из матрицы
+    - calculate_packaging_metrics()      — расчёт производных упаковочных метрик
+    - get_packaging_user_inputs()        — интерактивный ввод типа упаковки
+    - apply_packaging_to_rows()          — заполнение 18 упаковочных колонок
+    - copy_packaging_before_to_after()   — автокопирование упаковки Before → After
 
 Использование:
-    from bp_processing import main as processing_main
+    from py_lib.pipeline.processing import process_bp_file
+    result = process_bp_file('input_files/input_breakpoint_files/BP26000001.xlsx')
 
-Версия: 1.0
-Совместимость: Python 3.12.3+, Pandas 3.0.2+, OpenPyXL 3.1.5+
+Версия: 2.0
+Совместимость: Python 3.14.4+, Pandas 3.0.3+, OpenPyXL 3.1.5+
 Поддержка: PLD Engineering Center
 Дата создания: 2026-05-14
+Дата изменения: 2026-09-24
 Лицензия: MIT
 Статус: Production
 """
-import os
-import sys
-import re
-import warnings
-import time
-from datetime import datetime, timedelta
-from typing import Optional
 
+import os
+import re
+import time
+import warnings
+from datetime import timedelta
+from functools import lru_cache
+from typing import Any, Dict, Hashable, List, Optional, Tuple
+
+import numpy as np
 import pandas as pd
 
-from pandas.errors import EmptyDataError, ParserError
-from openpyxl.utils.exceptions import InvalidFileException
+from py_lib.config.core import (
+    # Пути к директориям
+    # --- Входные данные ---
+    INPUT_CONFIGURATION_DIR,
+    INPUT_PACKING_LIST_DIR,
+
+    # Префиксы файлов входных/выходных данных
+    CONFIGURATION_PREFIX,
+
+    # Колонки с полными данными
+    BP_GMOM_TO_KEEP_COLS,
+    CONF_TO_KEEP_COLS,
+
+    # Колонки по типам данных
+    BP_GBOM_INT_COLS,
+    BP_GBOM_DATETIME_COLS,
+
+    # Колонки по типу Before/After данных упаковки
+    BEFORE_PAC_COLS, AFTER_PAC_COLS,
+
+    # Матрица определения цехов
+    WORKSHOPS, WORKSHOP_PREFIX_TO_CODE,
+
+    # Матрица определения моделей
+    BOM_PRODUCT_MAP,
+
+    # Массив колонок предпоказа результирующих данных
+    STEP_FOCUS_COLUMNS_MAP,
+
+    # Список порядка колонок в итоговом датафрейме
+    BP_DATA_COLUMNS_ORDER,
+
+    # Типы упаковки
+    PACKAGING_TYPE
+)
+
+from py_lib.engine.etl import (
+    find_latest_excel_file,
+    read_excel_file,
+    data_absence_marker,
+    normalize_data,
+    get_unique_non_empty_values,
+    keep_chinese_lines,
+    extract_parentheses_content,
+    extract_packaging_data,
+)
+
+from py_lib.pipeline.find_pairs import find_pairs
+
+from py_lib.ui.interaction import (
+    ask_int_or_nan,
+    ask_user_input,
+    wait_for_user,
+    print_step_header,
+    show_dataframe_preview,
+    save_state,
+    confirm_step,
+)
 
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
-def user_input_for_single_bp(
-    df_current: pd.DataFrame,
+def get_bp_status(
     bp_number: str
-) -> pd.DataFrame:
-    """
-    Запрашивает у пользователя ввод общих данных (Batch fact, Change Date) для всего BP.
-
-    Аргументы:
-        df_current (pd.DataFrame): Текущий DataFrame для обработки.
-        bp_number (str):           Номер обрабатываемого бизнес-процесса.
-
-    Возвращается:
-        pd.DataFrame: Копия DataFrame с заполненными общими данными.
-    """
-    print(f"\n--- Ввод данных для {bp_number} ---")
-    print(f"Всего строк для обработки: {len(df_current)}")
-
-    df_result = df_current.copy()
-    print("\nВведите общие данные для всего технического изменения:")
-
-    # Безопасное извлечение текущих значений с помощью str_convert из etl.py
-    has_rows = len(df_result) > 0
-    current_batch_fact = str_convert(df_result['Batch fact'].iloc[0]) if has_rows and 'Batch fact' in df_result.columns else ''
-    current_change_date = str_convert(df_result['Change Date'].iloc[0]) if has_rows and 'Change Date' in df_result.columns else ''
-
-    # Ввод для Batch fact
-    print(f"Текущее Batch fact: {current_batch_fact if current_batch_fact else '(пусто)'}")
-    while True:
-        try:
-            batch_fact_input = input("Введите Batch fact (или Enter, чтобы оставить пустым): ").strip()
-            break
-        except KeyboardInterrupt:
-            _handle_interrupt()
-
-    # Ввод для Change Date
-    print(f"Текущее Change Date: {current_change_date if current_change_date else '(пусто)'}")
-    while True:
-        try:
-            change_date_input = input("Введите Change Date (ГГГГ-ММ-ДД или Enter, чтобы оставить пустым): ").strip()
-            break
-        except KeyboardInterrupt:
-            _handle_interrupt()
-
-    # Применение введенных данных к массиву
-    if batch_fact_input:
-        df_result['Batch fact'] = batch_fact_input
-        print(f"  Batch fact '{batch_fact_input}' применён ко всем {len(df_result)} строкам")
-
-    if change_date_input:
-        df_result['Change Date'] = change_date_input
-        print(f"  Change Date '{change_date_input}' применён ко всем {len(df_result)} строкам")
-
-    if not batch_fact_input and not change_date_input:
-        print("  Данные не введены. Будут заполнены позже в Excel.")
-
-    return df_result
-
-
-def interactive_translation(
-    data: List[str],
-    field_name: str,
-    examples: Optional[Dict[str, str]] = None
-) -> Dict[str, str]:
-    """
-    Интерактивный ввод переводов для списка уникальных значений.
-
-    Аргументы:
-        data (list): Список уникальных значений для перевода.
-        field_name (str): Название поля для вывода (например, "названий деталей").
-        examples (dict, optional): Словарь примеров переводов для отображения.
-
-    Возвращается:
-        Dict[str, str]: Словарь соответствий {оригинал: перевод}.
-    """
-    if not data:
-        return {}
-
-    translations: Dict[str, str] = {}
-
-    print(f"\nПеревод {field_name}:")
-    print(f"Найдено {len(data)} уникальных значений")
-
-    if examples:
-        print("Примеры переводов (можно использовать как шаблон):")
-        for ch, ru in examples.items():
-            print(f"     {ch[:50]}... → {ru[:50]}...")
-
-    print("\nСписок всех уникальных значений:\n" + "-" * 60)
-    for i, value in enumerate(data, 1):
-        print(f"  {i}. {value}")
-    print("-" * 60 + "\n\nИнструкция:")
-    print("  • Введите перевод и нажмите Enter → оригинальный текст будет заменён на перевод")
-    print("  • Нажмите Enter без перевода → текст останется оригинальным (без изменений)")
-
-    for i, value in enumerate(data, 1):
-        if pd.isna(value) or value == '':
-            translations[value] = value
-            continue
-
-        print(f"\n[{i}/{len(data)}] Оригинал: {value}")
-        while True:
-            try:
-                user_input = input("Введите перевод (или просто Enter чтобы оставить оригинал): ").strip()
-                break
-            except KeyboardInterrupt:
-                _handle_interrupt()
-            except EOFError:
-                print("\n\nКонец ввода. Программа завершена.")
-                sys.exit(0)
-
-        if user_input == '':
-            translations[value] = value
-            print(f"  → Оставляем оригинал: {value}")
-        else:
-            translations[value] = user_input
-            print(f"  → Заменяем на: {user_input}")
-
-    return translations
-
-
-def clean_surrogates(text):
-    """
-    Удаляет суррогатные символы Unicode из строки.
-
-    Суррогатные символы (коды U+D800-U+DFFF) являются невалидными
-    в кодировке UTF-8 и вызывают ошибку UnicodeEncodeError при попытке
-    сохранения в Excel через xlsxwriter.
-
-    Такие символы могут появляться в данных при:
-    - Чтении файлов с повреждённой кодировкой
-    - Обработке данных из разных источников с нестандартным Unicode
-    - Некорректной конвертации между кодировками
-
-    Аргументы:
-        text (str or any): Строка для очистки или любое другое значение.
-
-    Возвращается:
-        str or any: Очищенная строка без суррогатных символов или
-                    исходное значение, если аргумент не является строкой.
-
-    Примеры:
-        >>> clean_surrogates('Прокладка\udcd0 головки')
-        'Прокладка головки'
-        >>> clean_surrogates(123)
-        123
-        >>> clean_surrogates(None)
-        None
-    """
-    if isinstance(text, str):
-        return re.sub(r'[\ud800-\udfff]', '', text)
-    return text
-
-
-def clean_string_for_excel(text):
-    """
-    Выполняет полную очистку строки от проблемных символов для сохранения в Excel.
-
-    Обрабатывает следующие проблемы:
-    1. Суррогатные символы Unicode (U+D800-U+DFFF) — удаляются полностью
-    2. Символы перевода строки (\\n, \\r) — заменяются на обычные пробелы
-    3. Символы табуляции (\\t) — заменяются на обычные пробелы
-    4. Множественные пробелы — схлопываются в один
-    5. Пробелы в начале и конце строки — удаляются
-
-    Функция является композицией нескольких операций очистки и использует
-    clean_surrogates() как первый шаг обработки.
-
-    Аргументы:
-        text (str or any): Строка для очистки или любое другое значение.
-
-    Возвращается:
-        str or any: Полностью очищенная строка без проблемных символов или
-                    исходное значение, если аргумент не является строкой.
-
-    Примеры:
-        >>> clean_string_for_excel('Прокладка\\nголовки\\udcd0 блока')
-        'Прокладка головки блока'
-        >>> clean_string_for_excel('Деталь\\t\\tтест')
-        'Деталь тест'
-        >>> clean_string_for_excel('  много   пробелов  ')
-        'много пробелов'
-        >>> clean_string_for_excel(None)
-        None
-    """
-    if not isinstance(text, str):
-        return text
-
-    # Удаляем суррогатные символы (невалидные в UTF-8)
-    text = clean_surrogates(text)
-
-    # Заменяем переводы строк и табуляции на пробелы
-    text = text.replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
-
-    # Схлопываем множественные пробелы в один
-    text = re.sub(r'\s+', ' ', text)
-
-    # Удаляем пробелы в начале и конце
-    text = text.strip()
-
-    return text
-
-
-def clean_dataframe_strings(df):
-    """
-    Очищает все строковые колонки DataFrame от проблемных символов.
-    
-    Применяет функцию clean_string_for_excel() ко всем значениям
-    в строковых колонках (dtype='object'). Обрабатывает каждую ячейку
-    индивидуально, отслеживая количество внесённых исправлений.
-
-    Функция не модифицирует исходный DataFrame, а возвращает его копию
-    с очищенными данными. Числовые колонки и колонки с другими типами
-    данных остаются без изменений.
-
-    Аргументы:
-        df (pd.DataFrame or None): DataFrame для очистки. Может быть None
-                                    или пустым DataFrame.
-
-    Возвращается:
-        pd.DataFrame or None: Копия DataFrame с очищенными строковыми данными.
-                              Возвращает None, если на входе был None.
-                              Возвращает пустой DataFrame, если на входе был
-                              пустой DataFrame.
-
-    Примечания:
-        - Функция выполняет глубокое копирование DataFrame (df.copy())
-        - Выводит информационное сообщение при обнаружении проблемных символов
-        - Обрабатывает только колонки с dtype='object' (строковые)
-        - Каждая ячейка проверяется на принадлежность к типу str
-
-    Примеры:
-        >>> df = pd.DataFrame({'A': ['тест\\nстрока', 'нормально'], 'B': [1, 2]})
-        >>> clean_df = clean_dataframe_strings(df)
-        [Очистка данных] Исправлено 1 ячеек с проблемными символами
-        >>> clean_df['A'].iloc[0]
-        'тест строка'
-    """
-    if df is None or df.empty:
-        return df
-
-    df_clean = df.copy()
-    cleaned_count = 0
-
-    for col in df_clean.columns:
-        # Обрабатываем только строковые/объектные колонки
-        if df_clean[col].dtype == 'object':
-            for idx in df_clean.index:
-                val = df_clean.at[idx, col]
-                if isinstance(val, str):
-                    cleaned_val = clean_string_for_excel(val)
-                    if cleaned_val != val:
-                        df_clean.at[idx, col] = cleaned_val
-                        cleaned_count += 1
-
-    if cleaned_count > 0:
-        print(f"  [Очистка данных] Исправлено {cleaned_count} ячеек с проблемными символами")
-
-    return df_clean
-
-
-def safe_str_convert(
-        value,
-        default=''
-    ) -> str:
-    """
-    Безопасно преобразует значение в строку, обрабатывая None и ошибки.
-
-    Аргументы:
-        value: Значение для преобразования.
-        default (str): Значение по умолчанию при ошибке. По умолчанию ''.
-
-    Возвращается:
-        str: Преобразованная строка или значение по умолчанию.
-    """
-    if value is None:
-        return default
-    try:
-        return str(value).strip()
-    except (ValueError, TypeError):
-        return default
-
-
-def safe_date_convert(
-        value,
-        default=None,
-        pattern: str = '%Y-%m-%d'
-    ) -> Optional[datetime]:
-    """
-    Безопасно преобразует значение в дату, обрабатывая различные форматы.
-
-    Поддерживает:
-    - datetime объекты (возвращаются как есть)
-    - строки в заданном формате
-    - числовые timestamp'ы
-
-    Аргументы:
-        value: Значение для преобразования.
-        default: Значение по умолчанию при ошибке. По умолчанию None.
-        pattern (str): Формат строки даты. По умолчанию '%Y-%m-%d'.
-
-    Возвращается:
-        Optional[datetime]: Объект datetime или значение по умолчанию.
-    """
-    try:
-        if isinstance(value, datetime):
-            return value
-        if isinstance(value, str):
-            return datetime.strptime(value, pattern)
-        if isinstance(value, (int, float)):
-            return datetime.fromtimestamp(value)
-        return default
-    except (ValueError, TypeError):
-        return default
-
-
-
-def restore_state(saved_df, step_name):
-    """
-    Восстанавливает сохранённое состояние DataFrame.
-
-    Аргументы:
-        saved_df (pd.DataFrame): Сохранённый DataFrame.
-        step_name (str): Имя шага для вывода сообщения.
-
-    Возвращается:
-        pd.DataFrame: Восстановленный DataFrame или None при ошибке.
-    """
-    if saved_df is not None:
-        print(f"  [Восстанавливаем состояние перед шагом: {step_name}]")
-        return saved_df.copy(deep=True)
-    print("  Ошибка: нет сохранённого состояния для восстановления!")
-    return None
-
-
-def load_excel_file(filename, description="файл"):
-    """
-    Загружает Excel файл с полной обработкой ошибок и проверкой существования.
-
-    Обрабатываемые ошибки:
-        - FileNotFoundError
-        - PermissionError (файл открыт в Excel)
-        - EmptyDataError (пустой файл)
-        - ParserError (повреждённый формат)
-        - InvalidFileException (некорректный Excel файл)
-        - ValueError (неопределённый формат)
-        - Общие исключения
-
-    Аргументы:
-        filename (str): Имя файла для загрузки.
-        description (str): Описание файла для вывода сообщений.
-
-    Возвращается:
-        pd.DataFrame: Загруженный DataFrame или None при ошибке.
-    """
-    if not os.path.exists(filename):
-        print(f"Ошибка: {description} '{filename}' не найден в текущей папке!")
-        print(f"Текущая директория: {os.getcwd()}")
-        return None
-
-    try:
-        df = pd.read_excel(filename)
-        print(f"{description} '{filename}' загружен успешно!")
-        print(f"Размер: {df.shape[0]} строк × {df.shape[1]} колонок")
-        df = clean_dataframe_strings(df)  # Очистка данных от проблемных символов
-        return df
-    except FileNotFoundError:
-        print(f"Ошибка: {description} '{filename}' не найден (ошибка FileNotFoundError)")
-        return None
-    except PermissionError:
-        print(f"Ошибка: Нет прав для чтения {description.lower()} '{filename}'")
-        print("Закройте файл, если он открыт в Excel, и попробуйте снова.")
-        return None
-    except (EmptyDataError, ParserError) as e:
-        print(f"Ошибка: {description} '{filename}' повреждён или имеет неверный формат: {e}")
-        return None
-    except InvalidFileException:
-        print(f"Ошибка: {description} '{filename}' не является корректным Excel файлом")
-        return None
-    except ValueError as e:
-        if "Excel file format cannot be determined" in str(e):
-            print(f"Ошибка: Не удалось определить формат {description.lower()} '{filename}'")
-            print("Убедитесь, что файл имеет расширение .xlsx или .xls")
-        else:
-            print(f"Ошибка при загрузке {description.lower()} '{filename}': {e}")
-        return None
-    except Exception as e:
-        print(f"Непредвиденная ошибка при загрузке {description.lower()} '{filename}': {e}")
-        print(f"Тип ошибки: {type(e).__name__}")
-        return None
-
-
-def show_dataframe_preview(
-    df,
-    step_name,
-    max_rows=10,
-    focus_columns=None,
-    max_colwidth=40
-):
-    """
-    Отображает первые строки DataFrame для визуального контроля результатов шага.
-    Пустые значения (NaN, None) показываются как пустая ячейка.
-    """
-    if df is None or df.empty:
-        print(f"\n[Preview после шага: {step_name}]")
-        print("  DataFrame пуст!")
-        return
-
-    print(f"\n[Preview после шага: {step_name}]")
-
-    # Определяем колонки для отображения
-    if focus_columns is None:
-        display_cols = df.columns[:5].tolist()
-        print(f"Показаны первые 5 колонок из {len(df.columns)}")
-    else:
-        display_cols = [col for col in focus_columns if col in df.columns]
-        if len(df.columns) > len(display_cols):
-            print(f"Показаны {len(display_cols)} колонок из {len(df.columns)}")
-
-    if not display_cols:
-        print("  Нет колонок для отображения!")
-        return
-
-    # Создаем копию DataFrame для отображения
-    preview_df = df[display_cols].head(max_rows).copy()
-
-    # Подготавливаем каждую колонку
-    for col in preview_df.columns:
-        # Заменяем пустые значения на пустую строку
-        preview_df[col] = preview_df[col].apply(
-            lambda x: '' if pd.isna(x) else str(x)
-        )
-        # Обрезаем длинные строки
-        preview_df[col] = preview_df[col].apply(
-            lambda x: (x[:max_colwidth] + '…') if len(x) > max_colwidth else x
-        )
-
-    # Выводим с помощью pandas, пустые строки отображаются как пустые ячейки
-    with pd.option_context(
-        'display.max_columns', len(display_cols),
-        'display.width', None,
-        'display.max_colwidth', max_colwidth,
-        'display.show_dimensions', False,
-        'display.unicode.east_asian_width', True
-    ):
-        print(preview_df.to_string(index=False, na_rep=''))
-    print()
-
-
-def filter_chinese_lines(text):
-    """
-    Фильтрует китайские иероглифы из текста.
-
-    Для многострочного текста собирает строки с китайскими иероглифами.
-    Для однострочного текста обрезает всё после последнего китайского иероглифа.
-
-    Аргументы:
-        text: Текст для фильтрации (может быть не строкой).
-
-    Возвращается:
-        str: Отфильтрованный текст или исходное значение, если не строка.
-    """
-    if not isinstance(text, str):
-        return text
-
-    chinese_pattern = re.compile(r'[\u4e00-\u9fff]')
-
-    if '\n' in text:
-        lines = text.split('\n')
-        chinese_lines = [line.strip() for line in lines if chinese_pattern.search(line)]
-        return ', '.join(chinese_lines) if chinese_lines else text
-    else:
-        last_chinese_pos = -1
-        for i, char in enumerate(text):
-            if chinese_pattern.match(char):
-                last_chinese_pos = i
-
-        if last_chinese_pos != -1:
-            return text[:last_chinese_pos + 1]
-        else:
-            return text
-
-
-def extract_parentheses_content(text):
-    """
-    Извлекает содержимое скобок из текста.
-
-    Поддерживает как круглые скобки (), так и китайские （）.
-
-    Аргументы:
-        text: Текст для обработки (может быть NaN).
-
-    Возвращается:
-        str: Содержимое скобок (объединённое через пробел) или исходный текст.
-    """
-    if pd.isna(text):
-        return text
-
-    text_str = str(text)
-    matches = re.findall(r'[（(](.*?)[）)]', text_str)
-
-    if matches:
-        return ' '.join(matches)
-
-    return text_str
-
-
-def get_unique_non_empty_values(series, column_name):
-    """
-    Получает уникальные значения из серии, исключая пустые значения и '-'.
-
-    Аргументы:
-        series (pd.Series): Серия для анализа.
-        column_name (str): Имя колонки для вывода сообщений.
-
-    Возвращается:
-        list: Список уникальных непустых значений.
-    """
-    series = series.astype(str)
-    unique_values = series.dropna().unique()
-    filtered_values = [v for v in unique_values if v != '-' and v != 'nan' and str(v).strip() != '']
-
-    if len(filtered_values) == 0:
-        print(f"  Колонка '{column_name}': все значения равны '-' или пустые. Перевод не требуется.")
-
-    return filtered_values
-
-
-def interactive_translation(data, field_name, examples=None):
-    """
-    Интерактивный ввод переводов для списка уникальных значений.
-
-    Пользователь может:
-    - Ввести перевод → значение будет заменено
-    - Нажать Enter без ввода → значение останется оригинальным
-
-    Аргументы:
-        data (list): Список уникальных значений для перевода.
-        field_name (str): Название поля для вывода (например, "названий деталей").
-        examples (dict, optional): Словарь примеров переводов для отображения.
-
-    Возвращается:
-        dict: Словарь соответствий {оригинал: перевод}.
-
-    Примечание:
-        Функция отображает все значения перед началом ввода.
-    """
-    if not data or len(data) == 0:
-        return {}
-
-    translations = {}
-
-    print(f"\nПеревод {field_name}:")
-    print(f"Найдено {len(data)} уникальных значений")
-
-    if examples:
-        print("Примеры переводов (можно использовать как шаблон):")
-        for ch, ru in examples.items():
-            print(f"     {ch[:50]}... → {ru[:50]}...")
-
-    # Выводим все оригинальные значения перед началом ввода
-    print("\nСписок всех уникальных значений:")
-    print("-" * 60)
-    for i, value in enumerate(data, 1):
-        print(f"  {i}. {value}")
-    print("-" * 60)
-
-    print("\nИнструкция:")
-    print("  • Введите перевод и нажмите Enter → оригинальный текст будет заменён на перевод")
-    print("  • Нажмите Enter без перевода → текст останется оригинальным (без изменений)")
-
-    for i, value in enumerate(data, 1):
-        if pd.isna(value) or value == '':
-            translations[value] = value
-            continue
-
-        print(f"\n[{i}/{len(data)}] Оригинал: {value}")
-        while True:
-            try:
-                user_input = input(
-                    "Введите перевод (или просто Enter чтобы оставить оригинал): "
-                ).strip()
-                break
-            except KeyboardInterrupt:
-                print()
-                while True:
-                    confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
-                    if confirm == 'да':
-                        print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-                        sys.exit(0)
-                    elif confirm == 'нет':
-                        print("\nПродолжаем работу...")
-                        break  # Продолжаем ввод
-                    else:
-                        print("Пожалуйста, введите 'да' или 'нет'")
-            except EOFError:
-                print("\n\nКонец ввода. Программа завершена.")
-                sys.exit(0)
-
-        if user_input == '':
-            translations[value] = value
-            print(f"  → Оставляем оригинал: {value}")
-        else:
-            translations[value] = user_input
-            print(f"  → Заменяем на: {user_input}")
-
-    return translations
-
-
-def find_bp_files():
-    """
-    Ищет BP файлы в текущей папке.
-
-    Файлы должны соответствовать шаблону: BP*.xlsx
-    Временные файлы (~$BP*.xlsx) игнорируются.
-
-    Возвращается:
-        list: Отсортированный список найденных BP файлов.
-    """
-    bp_files = []
-    try:
-        for file in os.listdir('.'):
-            if re.match(r'^BP.*\.xlsx$', file) and not file.startswith('~$'):
-                bp_files.append(file)
-    except PermissionError:
-        print("Ошибка: Нет прав для чтения текущей директории")
-        return []
-    except OSError as e:
-        print(f"Ошибка при доступе к директории: {e}")
-        return []
-
-    bp_files.sort()
-    return bp_files
-
-
-def find_latest_breakpoint_file(file_prefix: str = 'breakpoint_data') -> Optional[str]:
-    """
-    Находит файл breakpoint_data с самой поздней датой в имени.
-
-    Аргументы:
-        file_prefix (str): Префикс имени файла для поиска.
-
-    Возвращается:
-        Optional[str]: Имя самого свежего файла или None, если файлы не найдены.
-
-    Примечание:
-        bp_main.find_latest_breakpoint_file - аналогичная функция в главном модуле
-    """
-    pattern = rf"[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}_{file_prefix}\.xlsx"
-
-    matching_files = []
-
-    for filename in os.listdir('.'):
-        if re.match(pattern, filename):
-            # Извлекаем дату из имени файла
-            date_str = filename[:10]  # первые 10 символов = YYYY-MM-DD
-            try:
-                file_date = datetime.strptime(date_str, '%Y-%m-%d')
-                matching_files.append((file_date, filename))
-            except ValueError:
-                continue
-
-    if not matching_files:
-        return None
-
-    # Сортируем по дате и возвращаем самый свежий
-    matching_files.sort(key=lambda x: x[0], reverse=True)
-    return matching_files[0][1]
-
-
-def load_latest_breakpoint_data(file_prefix: str = 'breakpoint_data') -> Optional[pd.DataFrame]:
-    """
-    Загружает самый свежий файл breakpoint_data с датой в имени.
-
-    Ожидаемая структура файла:
-        - строка 0: объединённая ячейка "ДЛЯ КЛАДОВЩИКОВ"
-        - строка 1: английские заголовки колонок
-        - строка 2: русские переводы заголовков
-        - строки 3+: данные
-
-    При загрузке используем английские заголовки как имена колонок (header=1),
-    а строку с русскими переводами удаляем из данных.
-
-    Аргументы:
-        file_prefix (str): Префикс имени файла для поиска.
-
-    Возвращается:
-        Optional[pd.DataFrame]: DataFrame с данными или None.
-    """
-    latest_file = find_latest_breakpoint_file(file_prefix)
-
-    if latest_file is None:
-        print("  Внимание: Не найдено ни одного файла breakpoint_data с историей")
-        return None
-
-    try:
-        # Загружаем, используя вторую строку (индекс 1) как заголовки (английские)
-        df = pd.read_excel(latest_file, sheet_name='pivot', header=1)
-        print(f"  Файл: {latest_file} загружен успешно!")
-
-        # В загруженном DataFrame первая строка данных (индекс 0) — это русские переводы.
-        # Удаляем её, так как она не является реальными данными.
-        if not df.empty:
-            df = df.iloc[1:].reset_index(drop=True)
-            print("  Строка с русскими переводами заголовков удалена из данных")
-        else:
-            print("  Внимание: Файл не содержит данных после заголовков")
-            return None
-
-        print(f"  Размер: {df.shape[0]} строк × {df.shape[1]} колонок")
-        df = clean_dataframe_strings(df)  # Очистка данных от проблемных символов
-        return df
-
-    except FileNotFoundError:
-        print(f"  Ошибка: Файл '{latest_file}' не найден")
-        return None
-    except PermissionError:
-        print(f"  Ошибка: Нет прав для чтения файла '{latest_file}'")
-        print("  Закройте файл, если он открыт в Excel, и попробуйте снова.")
-        return None
-    except (EmptyDataError, ParserError) as e:
-        print(f"  Ошибка: Файл '{latest_file}' повреждён или имеет неверный формат: {e}")
-        return None
-    except InvalidFileException:
-        print(f"  Ошибка: Файл '{latest_file}' не является корректным Excel файлом")
-        return None
-    except ValueError as e:
-        if "Excel file format cannot be determined" in str(e):
-            print(f"  Ошибка: Не удалось определить формат файла '{latest_file}'")
-            print("  Убедитесь, что файл имеет расширение .xlsx или .xls")
-        else:
-            print(f"  Ошибка при загрузке файла '{latest_file}': {e}")
-        return None
-    except Exception as e:
-        print(f"  НЕПРЕДВИДЕННАЯ ОШИБКА при загрузке файла '{latest_file}': {e}")
-        print(f"  Тип ошибки: {type(e).__name__}")
-        return None
-
-
-def new_bp_check():
-    """
-    Проверяет наличие новых BP для скачивания из системы G-BOM.
-
-    Алгоритм:
-    1. Загружает bp_list_2025-2026.xlsx
-    2. Загружает последний файл breakpoint_data.xlsx
-    3. Применяет фильтры к списку BP:
-       - IsUnBomBP = "No"
-       - Status != 'Closed'
-       - Part Name (E) не содержит "SOFTWARE"
-    4. Находит разницу между BP в отфильтрованном списке и уже обработанными
-
-    Возвращается:
-        set: Множество номеров BP, которые нужно скачать, или None при ошибке.
-
-    Требования:
-        - Файл bp_list_2025-2026.xlsx должен существовать в текущей папке
-        - Доступ к файлу для чтения
-    """
-
-    # Проверка наличия файлов перед загрузкой
-    required_files = ['bp_list_2025-2026.xlsx']
-    missing_files = []
-
-    for file in required_files:
-        if not os.path.exists(file):
-            missing_files.append(file)
-
-    if missing_files:
-        print("\n  ОШИБКА: Отсутствуют обязательные файлы:")
-        for file in missing_files:
-            print(f"    - {file}")
-        print(f"\n  Текущая директория: {os.getcwd()}")
-        print("  Убедитесь, что все файлы находятся в текущей папке.")
-        return None
-
-    # 1) Загрузка bp_list_2025-2026.xlsx с обработкой ошибок
-    print("\n  Загрузка файла bp_list_2025-2026.xlsx...")
-    df_source_bp_list = None
-
-    try:
-        # Проверка прав доступа к файлу
-        if not os.access('bp_list_2025-2026.xlsx', os.R_OK):
-            print("  ОШИБКА: Нет прав на чтение файла bp_list_2025-2026.xlsx!")
-            print("  Закройте файл, если он открыт в Excel, и попробуйте снова.")
-            return None
-
-        df_source_bp_list = pd.read_excel('bp_list_2025-2026.xlsx')
-        print("    Файл 'bp_list_2025-2026.xlsx' загружен успешно!")
-        print(f"    Размер: {df_source_bp_list.shape[0]} строк × {df_source_bp_list.shape[1]} колонок")
-        df_source_bp_list = clean_dataframe_strings(df_source_bp_list)  # Очистка данных от проблемных символов
-
-    except PermissionError:
-        print("  ОШИБКА: Нет прав доступа к файлу bp_list_2025-2026.xlsx!")
-        print("  Закройте файл, если он открыт в других программах, и попробуйте снова.")
-        return None
-    except FileNotFoundError:
-        print("  ОШИБКА: Файл bp_list_2025-2026.xlsx не найден!")
-        return None
-    except EmptyDataError:
-        print("  ОШИБКА: Файл bp_list_2025-2026.xlsx пуст!")
-        return None
-    except ParserError as e:
-        print(f"  ОШИБКА: Не удалось разобрать файл bp_list_2025-2026.xlsx: {e}")
-        return None
-    except InvalidFileException:
-        print("  ОШИБКА: Файл bp_list_2025-2026.xlsx не является корректным Excel файлом!")
-        return None
-    except ValueError as e:
-        if "Excel file format cannot be determined" in str(e):
-            print("  ОШИБКА: Не удалось определить формат файла bp_list_2025-2026.xlsx!")
-            print("  Убедитесь, что файл имеет расширение .xlsx или .xls")
-        else:
-            print(f"  ОШИБКА при загрузке bp_list_2025-2026.xlsx: {e}")
-        return None
-    except Exception as e:
-        print(f"  НЕПРЕДВИДЕННАЯ ОШИБКА при загрузке bp_list_2025-2026.xlsx: {e}")
-        print(f"  Тип ошибки: {type(e).__name__}")
-        return None
-
-    # 2) Загрузка самого свежего breakpoint_data.xlsx с датой в имени
-    print("\n  Загрузка последнего файла breakpoint_data...")
-    df_source_breakpoint_data = load_latest_breakpoint_data()
-
-    if df_source_breakpoint_data is None or df_source_breakpoint_data.empty:
-        print("  ВНИМАНИЕ: Не найдено файлов breakpoint_data с историей")
-        print("  Все BP из списка будут считаться новыми.")
-        set_bp_no = set()
-    else:
-        # Проверяем, что колонка BP_No действительно существует
-        if 'BP_No' not in df_source_breakpoint_data.columns:
-            print("  ОШИБКА: Колонка 'BP_No' не найдена в загруженном файле!")
-            print(f"  Доступные колонки: {list(df_source_breakpoint_data.columns)[:10]}...")
-            return None
-
-        # Очистка данных: удаляем пустые значения и NaN
-        bp_no_series = df_source_breakpoint_data['BP_No'].dropna()
-        if bp_no_series.empty:
-            print("  ВНИМАНИЕ: Колонка 'BP_No' не содержит значений!")
-            set_bp_no = set()
-        else:
-            set_bp_no = set(bp_no_series.astype(str).str.strip())
-            set_bp_no = {bp for bp in set_bp_no if bp and bp != 'nan' and bp != 'None'}
-
-        print(f"  Уникальных BP в последнем файле: {len(set_bp_no)}")
-
-    # 3) Применение фильтров к df_source_bp_list (как в test_bp_check.py)
-    print("\n  Применение фильтров к bp_list_2025-2026.xlsx...")
-
-    # Удаляем полностью пустые строки
-    df_filtered = df_source_bp_list.dropna(how='all').copy()
-
-    # Проверка наличия необходимых колонок
-    required_columns = ['IsUnBomBP', 'Status', 'Date', 'Part Name (E)', 'BP']
-    missing_columns = [col for col in required_columns if col not in df_filtered.columns]
-
-    if missing_columns:
-        print("\n  ОШИБКА: В файле bp_list_2025-2026.xlsx отсутствуют необходимые колонки:")
-        for col in missing_columns:
-            print(f"    - {col}")
-        print(f"\n  Доступные колонки: {list(df_filtered.columns)}")
-        return None
-
-    # Преобразование колонок (как в test_bp_check.py)
-    df_filtered['IsUnBomBP'] = df_filtered['IsUnBomBP'].apply(safe_str_convert)
-    df_filtered['Status'] = df_filtered['Status'].apply(safe_str_convert)
-    df_filtered['Part Name (E)'] = df_filtered['Part Name (E)'].apply(safe_str_convert)
-    df_filtered['Date'] = df_filtered['Date'].apply(safe_date_convert)
-
-    # Фильтр 1: IsUnBomBP = "No"
-    initial_count = len(df_filtered)
-    mask1 = df_filtered['IsUnBomBP'] == 'No'
-    df_filtered = df_filtered[mask1]
-    print(f"    - Фильтр IsUnBomBP = 'No': {initial_count} → {len(df_filtered)} строк")
-
-    # Фильтр 2: Status != 'Closed'
-    initial_count = len(df_filtered)
-    mask2 = df_filtered['Status'] != 'Closed'
-    df_filtered = df_filtered[mask2]
-    print(f"    - Фильтр Status ≠ 'Closed': {initial_count} → {len(df_filtered)} строк")
-
-    # Фильтр 3: Part Name (E) НЕ содержит слово SOFTWARE
-    initial_count = len(df_filtered)
-    software_mask = df_filtered['Part Name (E)'].str.lower().str.contains('software', na=False)
-    df_filtered = df_filtered[~software_mask]
-    print(f"    - Фильтр Part Name (E) НЕ содержит 'SOFTWARE': {initial_count} → {len(df_filtered)} строк")
-
-    print(f"\n  После применения всех фильтров: {len(df_filtered)} строк")
-
-    # 4) Создание set по колонке "BP" из отфильтрованного DataFrame
-    try:
-        if 'BP' not in df_filtered.columns:
-            print("  ОШИБКА: Колонка 'BP' не найдена в отфильтрованных данных!")
-            return None
-
-        # Очистка данных: удаляем пустые значения и NaN
-        bp_series = df_filtered['BP'].dropna()
-        if bp_series.empty:
-            print("  ВНИМАНИЕ: Колонка 'BP' не содержит значений после фильтрации!")
-            set_bp = set()
-        else:
-            set_bp = set(bp_series.astype(str).str.strip())
-            set_bp = {bp for bp in set_bp if bp and bp != 'nan' and bp != 'None'}
-
-        print(f"\n  Уникальных BP из bp_list (после фильтров): {len(set_bp)}")
-
-    except KeyError as e:
-        print(f"  ОШИБКА: Колонка 'BP' не найдена при создании set: {e}")
-        return None
-    except AttributeError as e:
-        print(f"  ОШИБКА: Не удалось обработать данные колонки 'BP': {e}")
-        return None
-    except ValueError as e:
-        print(f"  ОШИБКА: Неверный формат данных в колонке 'BP': {e}")
-        return None
-    except Exception as e:
-        print(f"  НЕПРЕДВИДЕННАЯ ОШИБКА при создании set BP: {e}")
-        print(f"    Тип ошибки: {type(e).__name__}")
-        return None
-
-    # 5) Нахождение разницы (BP, которых нет в breakpoint_data)
-    try:
-        new_bp_set = set_bp - set_bp_no
-
-        print("\n" + "=" * 60)
-        print("  РЕЗУЛЬТАТ ПРОВЕРКИ НОВЫХ BP:")
-        print("=" * 60)
-        print(f"  Всего BP в списке (после фильтров): {len(set_bp)}")
-        print(f"  BP уже в breakpoint_data: {len(set_bp & set_bp_no)}")
-        print(f"  НОВЫЕ BP (требуют скачивания): {len(new_bp_set)}")
-
-        if len(new_bp_set) > 0:
-            print("\n  Список новых BP для скачивания из G-BOM:")
-            sorted_new_bp = sorted(new_bp_set)
-            for i, bp in enumerate(sorted_new_bp, 1):
-                print(f"    {i}. {bp}")
-        else:
-            print("\n  Нет новых BP для скачивания.")
-
-        return new_bp_set
-
-    except TypeError as e:
-        print(f"\n  ОШИБКА ТИПОВ при вычислении разницы BP: {e}")
-        print("  Проверьте, что set_bp и set_bp_no являются множествами (set)")
-        return None
-    except NameError as e:
-        print(f"\n  ОШИБКА: Переменные не определены - {e}")
-        print("  Проверьте, что set_bp и set_bp_no были успешно созданы")
-        return None
-    except Exception as e:
-        print(f"\n  КРИТИЧЕСКАЯ ОШИБКА при вычислении разницы BP: {e}")
-        print(f"  Тип ошибки: {type(e).__name__}")
-        return None
-
-
-def confirm_step(step_name, df_bp_new, saved_state):
-    """
-    Запрашивает у пользователя подтверждение после выполнения шага.
-
-    Поддерживает:
-    - Enter: подтверждение, сохранение нового состояния
-    - 'retry': отмена изменений и повтор шага
-
-    Аргументы:
-        step_name (str): Имя шага для вывода сообщений.
-        df_bp_new (pd.DataFrame): Текущий DataFrame после выполнения шага.
-        saved_state (pd.DataFrame): Сохранённое состояние перед шагом.
-
-    Возвращается:
-        tuple: (continue_flag, df, new_saved_state)
-            - continue_flag (bool): True если нужно продолжить, False если retry
-            - df (pd.DataFrame): Текущий или восстановленный DataFrame
-            - new_saved_state (pd.DataFrame): Новое сохранённое состояние
-    """
-    print(f"\n  Шаг '{step_name}' выполнен.")
-    while True:
-        try:
-            user_input = input(
-                "\nПроверьте результат. Если всё корректно, нажмите Enter. Если нужно повторить шаг, введите 'retry': "
-            ).strip().lower()
-            break
-        except KeyboardInterrupt:
-            print()
-            while True:
-                confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
-                if confirm == 'да':
-                    print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-                    sys.exit(0)
-                elif confirm == 'нет':
-                    print("\nПродолжаем работу...")
-                    break  # Продолжаем ввод
-                else:
-                    print("Пожалуйста, введите 'да' или 'нет'")
-        except EOFError:
-            print("\n\nОбнаружен конец ввода. Программа завершена.")
-            sys.exit(0)
-
-    if user_input == 'retry':
-        print(f"Повторяем шаг '{step_name}'...\n")
-        restored_df = restore_state(saved_state, step_name)
-        if restored_df is not None:
-            # Возвращаем False и восстановленный DataFrame, состояние не меняем
-            return False, restored_df, saved_state
-        else:
-            return False, df_bp_new, saved_state
-    else:
-        print("Продолжаем...\n")
-        # Сохраняем новое состояние после успешного шага
-        new_saved_state = save_state_before_step(df_bp_new)
-        return True, df_bp_new, new_saved_state
-
-
-def get_bp_status(bp_number):
+) -> str:
     """
     Запрашивает у пользователя статус для BP файла.
 
     Доступные варианты:
-    1. Согласован/Approved
-    2. Опубликован/Published
-    3. Закрыт/Closed
-    4. Другое (ввод вручную)
+    1. Согласован
+    2. Опубликован
+    3. Закрыт
+    4. Другое (ввод кастомного статуса вручную)
 
     Аргументы:
-        bp_number (str): Номер BP для вывода в сообщении.
+        bp_number (str): Номер технического изменения для вывода в сообщении.
 
     Возвращается:
-        str: Выбранный статус (с возможным переводом строки для двустрочного формата).
+        str: Выбранный статус на русском языке.
     """
     print(f"\n  Для BP файла {bp_number} укажите статус обработки:")
     print("  Доступные варианты:")
-    print("    1 - Согласован\n\t\tApproved")
-    print("    2 - Опубликован\n\t\tPublished")
-    print("    3 - Закрыт\n\t\tClosed")
+    print("    1 - Согласован")
+    print("    2 - Опубликован")
+    print("    3 - Закрыт")
     print("    4 - Другое (ввести вручную)")
 
     while True:
-        try:
-            choice = input("  Ваш выбор (1-4, или Enter для 'Согласован/Approved'): ").strip()
+        choice = ask_user_input("  Ваш выбор (1-4, или Enter для 'Согласован'): ").strip()
 
-            if choice == '' or choice == '1':
-                return "Согласован\nApproved"
-            elif choice == '2':
-                return "Опубликован\nPublished"
-            elif choice == '3':
-                return "Закрыт\nClosed"
-            elif choice == '4':
-                while True:
-                    try:
-                        custom_status = input("  Введите свой статус: ").strip()
-                        break
-                    except KeyboardInterrupt:
-                        print()
-                        while True:
-                            confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
-                            if confirm == 'да':
-                                print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-                                sys.exit(0)
-                            elif confirm == 'нет':
-                                print("\nПродолжаем работу...")
-                                break
-                            else:
-                                print("Пожалуйста, введите 'да' или 'нет'")
-                return custom_status if custom_status else "Согласован\nApproved"
-            else:
-                print("  Неверный выбор. Пожалуйста, введите число от 1 до 4.")
-        except KeyboardInterrupt:
-            print()
-            while True:
-                confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
-                if confirm == 'да':
-                    print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-                    sys.exit(0)
-                elif confirm == 'нет':
-                    print("\nПродолжаем работу...")
-                    break
-                else:
-                    print("Пожалуйста, введите 'да' или 'нет'")
+        if choice == '' or choice == '1':
+            return "Согласован"
+        elif choice == '2':
+            return "Опубликован"
+        elif choice == '3':
+            return "Закрыт"
+        elif choice == '4':
+            custom_status = ask_user_input("  Введите статус на русском языке: ").strip()
+
+            if custom_status:
+                return custom_status
+
+            return "Согласован"
+        else:
+            print("  [Ошибка] Неверный выбор. Пожалуйста, введите число от 1 до 4.")
 
 
-def classify_row_for_quantity_ss(row: pd.Series) -> str:
+def get_batch_fact(
+    bp_number: str
+) -> str:
     """
-    Классифицирует строку для определения, нужно ли вводить количество в SS.
-    Количество в SS вводится ТОЛЬКО для старых деталей (Delete).
-
-    Алгоритм:
-    1. Приоритет 1: колонка 'Change'
-        - 'Before Change' → Before
-        - 'After Change' → After
-    2. Приоритет 2: если Change пустой, то по 'Update Type':
-        - 'Delete' → Before (старая деталь, была на складе)
-        - 'Add' → After (новая деталь)
-        - 'Replace' → After (новая деталь)
-        - 'Update' → After (новая деталь)
+    Запрашивает у пользователя номер фактической партии (Batch fact) 
+    для текущего технического изменения (BP).
 
     Аргументы:
-        row (pd.Series): Строка DataFrame для классификации.
+        bp_number (str): Номер технического изменения (например, 'BP25010410').
 
     Возвращается:
-        str: 'Before' (требует ввода количества) или 'After' (не требует).
+        str: Введенный номер фактической партии или пустая строка.
     """
-    change_val = safe_str_convert(row.get('Change', ''))
+    print(f"\n  [Ввод данных] Настройка партии для {bp_number}")
 
-    # Приоритет 1: явное указание в колонке Change
-    if change_val == 'Before Change':
-        return 'Before'
-    elif change_val == 'After Change':
-        return 'After'
+    # Исполняем чистый защищенный ввод без KeyboardInterrupt
+    batch_fact = ask_user_input("  Введите номер фактической партии (Batch fact) [Enter — оставить пустым]: ")
 
-    # Приоритет 2: определяем по Update Type
-    update_type = safe_str_convert(row.get('Update Type', ''))
-
-    # Только Delete детали требуют ввода количества в SS
-    if update_type == 'Delete':
-        return 'Before'
+    if batch_fact:
+        print(f"    ✓ Зафиксировано Batch fact: '{batch_fact}'")
     else:
-        # Add, Replace, Update — это новые детали
-        return 'After'
+        print("    • Поле Batch fact оставлено пустым (можно заполнить позже в Excel)")
+
+    return batch_fact
 
 
-def get_quantity_in_ss(df_bp_new, bp_number):
+def get_change_date(
+    bp_number: str
+) -> Optional[str]:
     """
-    Интерактивный ввод количества деталей в SS для СТАРЫХ ДЕТАЛЕЙ (Delete).
-
-    Пользователь:
-    - Вводит номер детали
-    - Вводит количество (целое число)
-    - Можно ввести несколько деталей последовательно
-    - Enter без ввода номера устанавливает 0 для всех оставшихся деталей
+    Запрашивает у пользователя фактическую дату внедрения (Change Date) 
+    с обязательной валидацией инженерного формата ГГГГ-ММ-ДД.
 
     Аргументы:
-        df_bp_new (pd.DataFrame): DataFrame с данными BP.
-        bp_number (str): Номер BP для вывода.
+        bp_number (str): Номер технического изменения (например, 'BP25010410').
 
     Возвращается:
-        dict: Словарь {Part No.: количество} для деталей Delete.
+        Optional[str]: Валидная строка даты в формате YYYY-MM-DD или None.
     """
-    # Определяем, какие строки требуют ввода количества в SS (только Delete = Before)
-    df_bp_new['_need_quantity'] = df_bp_new.apply(classify_row_for_quantity_ss, axis=1)
+    print(f"\n  [Ввод данных] Настройка даты для {bp_number}")
 
-    # Фильтруем только детали, для которых нужно вводить количество (Before = Delete)
-    before_df = df_bp_new[df_bp_new['_need_quantity'] == 'Before'].copy()
+    while True:
+        change_date = ask_user_input("  Введите дату изменения (Change Date) в формате ГГГГ-ММ-ДД [Enter — пропустить]: ")
 
-    # Получаем уникальные детали Before (без дубликатов)
-    unique_parts = before_df[['Part No.']].drop_duplicates(subset=['Part No.'])
+        if not change_date:
+            print("    • Поле Change Date оставлено пустым (можно заполнить позже в Excel)")
+            return None
 
-    # Фильтруем пустые значения
-    valid_parts = []
-    for _, row in unique_parts.iterrows():
-        part_no = row.get('Part No.', '')
-        if not pd.isna(part_no) and str(part_no).strip() != '' and str(part_no).strip() != '-':
-            part_no_str = str(part_no).strip()
-            valid_parts.append(part_no_str)
+        # Строгая проверка регулярным выражением на соответствие стандарту ISO
+        if re.match(r'^\d{4}-\d{2}-\d{2}$', change_date):
+            print(f"    ✓ Зафиксировано Change Date: '{change_date}'")
+            return change_date
 
+        print("    [Ошибка] Нарушен формат! Пожалуйста, введите дату строго как ГГГГ-ММ-ДД (например: 2026-09-14).")
+
+
+def get_quantity_in_ss(
+    df_matrix_current: pd.DataFrame,
+    bp_number: str
+) -> Dict[str, float]:
+    """
+    Интерактивный ввод количества деталей в Safety Stock для "старых" компонентов.
+    Работает напрямую с двумерной матричной структурой df_matrix.
+
+    Аргументы:
+        df_matrix_current (pd.DataFrame): Текущая матрица Before/After.
+        bp_number (str):                  Номер технического изменения (например, 'BP25010410').
+
+    Возвращается:
+        Dict[str, float]: Словарь соответствий {Part No. Before: количество в SS}.
+    """
+    print(f"\n  [Анализ деталей] Проверка остатков в Safety Stock для {bp_number}...")
+
+    # Извлекаем чистые номера деталей Before через утилиту etl.py
+    valid_parts = sorted(get_unique_non_empty_values(df_matrix_current['Part No. Before'], 'Part No. Before'))
     total_parts = len(valid_parts)
 
-    # Выводим статистику по классификации
-    total_before = len(before_df)
-    total_after = len(df_bp_new) - total_before
-    print(f"\n  Анализ деталей для BP {bp_number}:")
-    print(f"    - Деталей Delete (старые, требуют ввод количества): {total_before} записей, {len(valid_parts)} уникальных")
-    print(f"    - Деталей Add/Replace/Update (новые, количество = 0): {total_after} записей")
-
     if total_parts == 0:
-        print("\n  ВНИМАНИЕ: Не найдено деталей Delete для ввода количества в SS!")
+        print("\n  [Информация] В структуре текущего BP не обнаружено старых деталей. Шаг автоматически пропускается.")
         return {}
 
+    # Единый информационный блок: инструкция + список деталей
     print(f"\n  Ввод количества деталей в SS для BP {bp_number}")
-    print("-" * 60)
-    print("  СПИСОК УНИКАЛЬНЫХ ДЕТАЛЕЙ (DELETE - старые детали):")
+    print("=" * 60)
+    print("  ИНСТРУКЦИЯ:")
+    print("    1. Введите номер детали из списка ниже (можно копировать).")
+    print("    2. Укажите фактическое количество на складе (целое число ≥ 0).")
+    print("    3. Нажмите Enter без ввода номера — всем оставшимся деталям")
+    print("       автоматически присвоится 0 шт.")
+    print("=" * 60)
+    print("  СПИСОК СТАРЫХ ДЕТАЛЕЙ, ТРЕБУЮЩИХ УЧЕТА ОСТАТКОВ:")
     for i, part_no in enumerate(valid_parts, 1):
-        print(f"    {i}. {part_no}")
-    print("-" * 60)
+        print(f"    {i:>2}. {part_no}")
+    print("=" * 60)
 
-    print("\n  ИНСТРУКЦИЯ:")
-    print("    1. Введите номер детали, для которой хотите указать количество")
-    print("    2. Затем введите количество (целое число)")
-    print("    3. Можно ввести несколько деталей последовательно")
-    print("    4. Нажмите Enter без ввода номера детали, чтобы установить 0 для ВСЕХ оставшихся деталей")
-    print("-" * 60)
-
-    quantity_dict = {}
+    quantity_dict: Dict[str, float] = {}
     remaining_parts = set(valid_parts)
+    processed_count = 0
 
+    # Запускаем цикл интерактивного опроса по оставшимся деталям
     while remaining_parts:
-        # Показываем оставшиеся детали
-        print(f"\n  Осталось деталей: {len(remaining_parts)}")
-        print("  Список оставшихся деталей:")
+        print(f"\n  Прогресс: обработано {processed_count}/{total_parts} | осталось {len(remaining_parts)}")
+        print("  Доступные номера деталей:")
         for i, part_no in enumerate(sorted(remaining_parts), 1):
             print(f"    {i}. {part_no}")
 
-        print("\n  Введите номер детали (или Enter чтобы установить 0 для всех оставшихся):")
-        try:
-            part_input = input("  → ").strip()
-        except KeyboardInterrupt:
-            print()
-            while True:
-                confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
-                if confirm == 'да':
-                    print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-                    sys.exit(0)
-                elif confirm == 'нет':
-                    print("\nПродолжаем работу...")
-                    break
-                else:
-                    print("Пожалуйста, введите 'да' или 'нет'")
+        # Используем безопасный системный ввод вместо сырого input()
+        part_input = ask_user_input(
+            "\n  Введите номер детали (или Enter — автозаполнение оставшихся нулями): "
+        ).strip()
 
-        # Если Enter - устанавливаем 0 для всех оставшихся
-        if part_input == '':
+        # Если оператор нажал Enter на пустой строке — забиваем остаток списка нулями
+        if not part_input:
+            print("\n  [Автозаполнение] Для всех оставшихся деталей устанавливается количество: 0.0 шт.")
             for part_no in remaining_parts:
-                quantity_dict[part_no] = 0
-                print(f"    • {part_no} → количество: 0 (установлено автоматически)")
+                quantity_dict[part_no] = 0.0
+                print(f"    • {part_no} → 0.0 шт.")
             break
 
-        # Проверяем, существует ли такой номер детали
+        # Защита от дурака: проверяем, присутствует ли введенный номер в наборе оставшихся
         if part_input not in remaining_parts:
-            print(f"  ОШИБКА: Деталь с номером '{part_input}' не найдена в списке!")
-            print("  Пожалуйста, введите номер из списка выше.")
+            print(f"  [Ошибка] Номер '{part_input}' отсутствует в списке доступных старых деталей!")
+            print("  Пожалуйста, скопируйте корректный номер из перечня выше.")
             continue
 
-        # Запрашиваем количество
+        # Внутренний цикл валидации числового значения
         while True:
-            try:
-                qty_input = input(f"  Введите количество для детали {part_input}: ").strip()
-            except KeyboardInterrupt:
-                print()
-                while True:
-                    confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
-                    if confirm == 'да':
-                        print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-                        sys.exit(0)
-                    elif confirm == 'нет':
-                        print("\nПродолжаем работу...")
-                        break
-                    else:
-                        print("Пожалуйста, введите 'да' или 'нет'")
+            qty_input = ask_user_input(f"  Введите количество в SS для детали {part_input}: ").strip()
 
-            if qty_input == '':
-                quantity = 0
-                print("    → Установлено количество: 0")
+            if not qty_input:
+                quantity = 0.0
+                print("    → Принято значение по умолчанию: 0.0 шт.")
                 break
-            else:
-                try:
-                    quantity = int(qty_input)
-                    if quantity < 0:
-                        print("  Количество не может быть отрицательным. Попробуйте снова.")
-                        continue
-                    print(f"    → Установлено количество: {quantity}")
-                    break
-                except ValueError:
-                    print("  Ошибка: Введите целое число или нажмите Enter.")
-                    continue
+
+            if qty_input.isdigit():
+                quantity = int(qty_input)
+                print(f"    ✓ Успешно зафиксировано: {quantity} шт.")
+                break
+
+            print("  [Ошибка] Некорректный ввод! Укажите целое положительное число или нажмите Enter.")
 
         quantity_dict[part_input] = quantity
         remaining_parts.remove(part_input)
+        processed_count += 1
 
-    # Выводим итоговую таблицу
+    # Выводим сводную верификационную таблицу для текущего шага
+    total_ss = sum(quantity_dict.values())
     print("\n" + "=" * 60)
-    print("  ИТОГОВЫЕ ЗНАЧЕНИЯ КОЛИЧЕСТВА ДЕТАЛЕЙ В SS:")
+    print("  ИТОГОВЫЙ СВОД ОСТАТКОВ SAFETY STOCK ДЛЯ СЕССИИ:")
     print("=" * 60)
     for part_no in valid_parts:
-        qty = quantity_dict.get(part_no, 0)
-        print(f"    {part_no}: {qty} шт.")
+        qty = quantity_dict.get(part_no, 0.0)
+        print(f"    • {part_no}: {qty} шт.")
+    print("-" * 60)
+    print(f"  ВСЕГО ДЕТАЛЕЙ: {total_parts} | ОБЩЕЕ КОЛИЧЕСТВО В SS: {total_ss} шт.")
     print("=" * 60)
 
-    print(f"\n  Ввод количества завершён. Обработано деталей: {len(quantity_dict)} из {total_parts}")
     return quantity_dict
 
 
-def get_supplier_localization_status(df_bp_new, bp_number):
+def get_translation(
+    series_list: List[pd.Series],
+    field_name: str
+) -> Dict[str, str]:
     """
-    Интерактивный ввод статуса локализации для каждого уникального поставщика.
+    Интерактивный ввод переводов для уникальных текстовых значений.
+    Самостоятельно извлекает уникальные непустые значения из переданных серий,
+    объединяет их во множество и запускает пошаговый опрос оператора.
+
+    Аргументы:
+        series_list (List[pd.Series]): Список колонок (Series) для сбора уникальных значений.
+                                       Может содержать одну или несколько серий
+                                       (например, Before и After одновременно).
+        field_name (str):              Название поля для вывода инструкций
+                                       (например, "названий деталей").
+
+    Возвращается:
+        Dict[str, str]: Словарь соответствий {оригинал: перевод}.
+    """
+    # Собираем уникальные непустые значения из всех переданных серий
+    all_unique_values: List[str] = []
+    for series in series_list:
+        values = get_unique_non_empty_values(series, field_name)
+        all_unique_values.extend(values)
+
+    # Убираем дубликаты между сериями и сортируем
+    data = sorted(set(all_unique_values))
+
+    if not data:
+        print(f"\n  [Информация] В поле '{field_name}' отсутствуют данные для перевода. Шаг пропущен.")
+        return {}
+
+    translation_map: Dict[str, str] = {}
+
+    print(f"\n  === Запуск интерактивного перевода: {field_name} ===")
+    print(f"  Найдено уникальных записей к обработке: {len(data)}")
+    print("  ИНСТРУКЦИЯ:")
+    print("    • Введите перевод на русский язык и нажмите Enter.")
+    print("    • Если оставить строку пустой (просто нажать Enter), значение останется оригинальным.")
+    print("-" * 60)
+
+    for i, value in enumerate(data, 1):
+        # Защита от пустых ячеек и системных прочерков
+        if pd.isna(value) or str(value).strip() in ('', '-'):
+            translation_map[value] = '-'
+            continue
+
+        print(f"\n  [{i}/{len(data)}] Оригинал: {value}")
+
+        user_input = ask_user_input("  Введите перевод: ").strip()
+
+        if user_input == '':
+            # Пользователь решил оставить оригинальный текст без изменений
+            translation_map[value] = value
+            print(f"    → Оставлен оригинал: '{value}'")
+        else:
+            # Чистая замена текста на русский перевод
+            translation_map[value] = user_input
+            print(f"    → Установлен перевод: '{user_input}'")
+
+    return translation_map
+
+
+def get_supplier_localization_status(
+    series_list: List[pd.Series],
+    bp_number: str
+) -> Dict[str, str]:
+    """
+    Интерактивный ввод статуса локализации для каждого уникального поставщика сессии.
+    Самостоятельно извлекает уникальные непустые значения из переданных серий
+    и заполняет колонки Localization Before / After.
 
     Доступные статусы:
-    - 1: Да (локальный поставщик) → "Да\nYes"
-    - 2: Нет (зарубежный поставщик) → "Нет\nNo"
-    - Enter: пустое значение
+    - 1: Да (локальный поставщик)   -> "Да"
+    - 2: Нет (зарубежный поставщик) -> "Нет"
+    - Enter: статус не указан       -> "-"
 
     Аргументы:
-        df_bp_new (pd.DataFrame): DataFrame с данными BP.
-        bp_number (str): Номер BP для вывода.
+        series_list (List[pd.Series]): Список колонок для сбора уникальных поставщиков
+                                       (обычно [Supplier Name Before, Supplier Name After]).
+        bp_number (str):               Номер технического изменения (например, 'BP25010410').
 
     Возвращается:
-        pd.DataFrame: DataFrame с добавленной колонкой 'Localization'.
+        Dict[str, str]: Словарь соответствий {Название поставщика: Статус локализации}.
     """
-    print(f"\n  Ввод статуса локализации поставщиков для BP {bp_number}")
+    print(f"\n  [Анализ логистики] Проверка статусов локализации контрагентов для {bp_number}...")
 
-    if 'Supplier Name (RUS)' not in df_bp_new.columns:
-        print("  Колонка 'Supplier Name (RUS)' отсутствует. Создаём пустую колонку для статуса локализации.")
-        df_bp_new['Localization'] = ''
-        return df_bp_new
+    # Собираем уникальные непустые значения поставщиков из всех переданных серий
+    all_unique_values: List[str] = []
+    for series in series_list:
+        values = get_unique_non_empty_values(series, 'Supplier Name')
+        all_unique_values.extend(values)
 
-    # Получаем уникальных поставщиков
-    unique_suppliers = df_bp_new['Supplier Name (RUS)'].drop_duplicates()
-    unique_suppliers = [s for s in unique_suppliers if s != '-' and s != '' and s != 'nan']
+    # Убираем дубликаты между сериями и сортируем
+    all_unique_suppliers = sorted(set(all_unique_values))
+    total_suppliers = len(all_unique_suppliers)
 
-    if len(unique_suppliers) == 0:
-        print("  Нет уникальных поставщиков для указания статуса локализации")
-        df_bp_new['Localization'] = ''
-        return df_bp_new
+    if total_suppliers == 0:
+        print("  [Информация] В структуре текущего изменения не обнаружено заполненных поставщиков. Шаг пропущен.")
+        return {}
 
-    print(f"\n  Найдено уникальных поставщиков: {len(unique_suppliers)}")
-    print("\n  Список поставщиков для указания статуса локализации:")
+    print(f"\n  Найдено уникальных заводов-поставщиков: {total_suppliers}")
     print("-" * 60)
-    for i, supplier in enumerate(unique_suppliers, 1):
-        print(f"  {i}. {supplier}")
+    print("  СПИСОК ПОСТАВЩИКОВ ДЛЯ ОПРЕДЕЛЕНИЯ ЛОКАЛИЗАЦИИ:")
+    for i, supplier in enumerate(all_unique_suppliers, 1):
+        print(f"    {i}. {supplier}")
+    print("-" * 60)
+    print("  ДОСТУПНЫЕ КОДЫ СТАТУСОВ:")
+    print("    1 - Да (Локальный поставщик)  -> 'Да'")
+    print("    2 - Нет (Импортный поставщик) -> 'Нет'")
+    print("    [Enter] - Оставить пустым     -> '-'")
     print("-" * 60)
 
-    print("\n  Доступные статусы локализации:")
-    print("    1 - Да (локальный поставщик)")
-    print("    2 - Нет (зарубежный поставщик)")
-    print("    (или Enter, чтобы оставить пустым)")
+    localization_map: Dict[str, str] = {}
 
-    # Создаем словарь для хранения статусов
-    localization_statuses = {}
-
-    print("\n  Введите статус локализации для каждого поставщика:")
-    for i, supplier in enumerate(unique_suppliers, 1):
-        print(f"\n  [{i}/{len(unique_suppliers)}] Поставщик: {supplier}")
+    # Запускаем пошаговый опрос без KeyboardInterrupt блоков
+    for i, supplier in enumerate(all_unique_suppliers, 1):
+        print(f"\n  [{i}/{total_suppliers}] Контрагент: {supplier}")
 
         while True:
-            try:
-                choice = input("  Введите статус (1, 2 или Enter чтобы оставить пустым): ").strip()
+            choice = ask_user_input("  Введите код статуса (1, 2 или Enter): ").strip()
 
-                if choice == '':
-                    status = ''
-                    print("    → Статус не указан (будет пустым)")
-                    break
-                elif choice == '1':
-                    status = 'Да\nYes'
-                    print(f"    → Статус: {status}")
-                    break
-                elif choice == '2':
-                    status = 'Нет\nNo'
-                    print(f"    → Статус: {status}")
-                    break
-                else:
-                    print("  Неверный выбор. Пожалуйста, введите число от 1, 2 или нажмите Enter.")
-            except KeyboardInterrupt:
-                print()
-                while True:
-                    confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
-                    if confirm == 'да':
-                        print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-                        sys.exit(0)
-                    elif confirm == 'нет':
-                        print("\nПродолжаем работу...")
-                        break
-                    else:
-                        print("Пожалуйста, введите 'да' или 'нет'")
-
-        localization_statuses[supplier] = status
-
-    # Добавляем колонку со статусом локализации
-    df_bp_new['Localization'] = df_bp_new['Supplier Name (RUS)'].map(localization_statuses).fillna('')
-
-    # Показываем результат
-    print("\n  Результат добавления статусов локализации:")
-    result_df = df_bp_new[['Supplier Name (RUS)', 'Localization']].drop_duplicates()
-    for _, row in result_df.iterrows():
-        status_display = row['Localization'] if row['Localization'] else ''
-        print(f"    {row['Supplier Name (RUS)']} → {status_display}")
-
-    return df_bp_new
-
-
-def translate_production_part_disposal(df_bp_new, bp_number):
-    """
-    Интерактивный перевод значений колонки 'Production Part Disposal'
-    Формат сохранения: "перевод\nоригинал"
-
-    Аргументы:
-        df_bp_new (pd.DataFrame): DataFrame с данными BP.
-        bp_number (str): Номер BP для вывода.
-
-    Возвращается:
-        pd.DataFrame: DataFrame с обновлённой колонкой 'Production Part Disposal'.
-    """
-    print(f"\n  Перевод значений 'Production Part Disposal' для BP {bp_number}")
-
-    if 'Production Part Disposal' not in df_bp_new.columns:
-        print("  Колонка 'Production Part Disposal' отсутствует. Пропускаем шаг.")
-        return df_bp_new
-
-    # Получаем уникальные значения, исключая пустые и '-'
-    unique_values = get_unique_non_empty_values(df_bp_new['Production Part Disposal'], 'Production Part Disposal')
-
-    if len(unique_values) == 0:
-        print("  Нет уникальных значений для перевода. Пропускаем шаг.")
-        return df_bp_new
-
-    print(f"\n  Найдено уникальных значений: {len(unique_values)}")
-    print("\n  Список значений для перевода:")
-    print("-" * 60)
-    for i, value in enumerate(unique_values, 1):
-        print(f"  {i}. {value}")
-    print("-" * 60)
-
-    print("\n  Инструкция:")
-    print("  • Введите перевод требования")
-    print("  • Нажмите Enter без ввода, чтобы оставить исходное значение без изменений")
-
-    # Создаем словарь для хранения переводов
-    translations = {}
-
-    for i, value in enumerate(unique_values, 1):
-        print(f"\n  [{i}/{len(unique_values)}] Исходное значение: {value}")
-
-        while True:
-            try:
-                user_input = input("  Введите перевод (или Enter чтобы оставить без изменений): ").strip()
-
-                if user_input == '':
-                    translations[value] = value
-                    print(f"    → Оставляем без изменений: {value}")
-                else:
-                    translations[value] = f"{user_input}\n{value}"
-                    print(f"    → Сохранено: {user_input}\\n{value}")
+            if choice == '':
+                localization_map[supplier] = '-'
+                print("    → Статус оставлен неопределенным ('-')")
                 break
-            except KeyboardInterrupt:
-                print()
-                while True:
-                    confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
-                    if confirm == 'да':
-                        print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-                        sys.exit(0)
-                    elif confirm == 'нет':
-                        print("\nПродолжаем работу...")
-                        break
-                    else:
-                        print("Пожалуйста, введите 'да' или 'нет'")
+            elif choice == '1':
+                localization_map[supplier] = 'Да'
+                print("    ✓ Зафиксировано: Да")
+                break
+            elif choice == '2':
+                localization_map[supplier] = 'Нет'
+                print("    ✓ Зафиксировано: Нет")
+                break
 
-    # Применяем переводы
-    df_bp_new['Production Part Disposal'] = df_bp_new['Production Part Disposal'].replace(translations)
+            print("  [Ошибка] Неверный выбор! Пожалуйста, введите цифру 1, 2 или просто нажмите Enter.")
 
-    # Показываем результат
-    print("\n  Результат перевода 'Production Part Disposal':")
-    result_df = df_bp_new[['Production Part Disposal']].drop_duplicates()
-    for _, row in result_df.iterrows():
-        val = row['Production Part Disposal']
-        if pd.isna(val):
-            display_value = ''
-        else:
-            val_str = str(val)
-            display_value = val_str if len(val_str) <= 60 else val_str[:57] + '...'
-        print(f"    {display_value}")
-
-    return df_bp_new
+    return localization_map
 
 
-def translate_interchangeable(df_bp_new, bp_number):
+def get_supplier_location_data(
+    series_list: List[pd.Series],
+    bp_number: str,
+    branch: str
+) -> Dict[str, Dict[str, str]]:
     """
-    Интерактивный перевод значений колонки 'Interchangeable'.
-    Формат сохранения: "перевод\nоригинал"
+    Интерактивный ввод данных о местоположении для каждого уникального поставщика.
+
+    Самостоятельно извлекает уникальные непустые значения из переданных серий
+    и последовательно запрашивает 4 поля: страна, город, улица, здание.
 
     Аргументы:
-        df_bp_new (pd.DataFrame): DataFrame с данными BP.
-        bp_number (str): Номер BP для вывода.
+        series_list (List[pd.Series]): Список колонок для сбора уникальных поставщиков.
+        bp_number (str):               Номер технического изменения (например, 'BP25010410').
+        branch (str):                  Ветка матрицы ('Before' или 'After') для
+                                       корректного вывода инструкций оператору.
 
     Возвращается:
-        pd.DataFrame: DataFrame с обновлённой колонкой 'Interchangeable'.
+        Dict[str, Dict[str, str]]: Словарь из 4 плоских мап вида
+            {
+                'location': {'Поставщик А': 'Китай',   ...},
+                'city':     {'Поставщик А': 'Шанхай',  ...},
+                'street':   {'Поставщик А': 'Nanjing', ...},
+                'building': {'Поставщик А': '123',     ...},
+            }
+        Пустые поля заполняются значением '-'.
     """
-    print(f"\n  Перевод значений 'Interchangeable' для BP {bp_number}")
+    print(f"\n  [Анализ логистики] Ввод местоположения {branch}-поставщиков для {bp_number}...")
 
-    if 'Interchangeable' not in df_bp_new.columns:
-        print("  Колонка 'Interchangeable' отсутствует. Пропускаем шаг.")
-        return df_bp_new
+    # Собираем уникальные непустые значения поставщиков из всех переданных серий
+    all_unique_values: List[str] = []
+    for series in series_list:
+        values = get_unique_non_empty_values(series, f'Supplier Name {branch}')
+        all_unique_values.extend(values)
 
-    # Получаем уникальные значения, исключая пустые и '-'
-    unique_values = get_unique_non_empty_values(df_bp_new['Interchangeable'], 'Interchangeable')
+    # Убираем дубликаты между сериями и сортируем
+    all_unique_suppliers = sorted(set(all_unique_values))
+    total_suppliers = len(all_unique_suppliers)
 
-    if len(unique_values) == 0:
-        print("  Нет уникальных значений для перевода. Пропускаем шаг.")
-        return df_bp_new
+    if total_suppliers == 0:
+        print(f"  [Информация] В структуре текущего изменения не обнаружено заполненных "
+              f"{branch}-поставщиков. Шаг пропущен.")
+        return {}
 
-    print(f"\n  Найдено уникальных значений: {len(unique_values)}")
-    print("\n  Список значений для перевода:")
+    print(f"\n  Найдено уникальных {branch}-поставщиков: {total_suppliers}")
     print("-" * 60)
-    for i, value in enumerate(unique_values, 1):
-        print(f"  {i}. {value}")
+    print(f"  СПИСОК {branch.upper()}-ПОСТАВЩИКОВ ДЛЯ ВВОДА МЕСТОПОЛОЖЕНИЯ:")
+    for i, supplier in enumerate(all_unique_suppliers, 1):
+        print(f"    {i}. {supplier}")
+    print("-" * 60)
+    print("  ИНСТРУКЦИЯ:")
+    print("    • Для каждого поставщика последовательно введите 4 поля:")
+    print("        1. Страна           (Supplier Location)")
+    print("        2. Город            (Supplier City)")
+    print("        3. Улица            (Supplier Street)")
+    print("        4. Здание           (Supplier Building)")
+    print("    • Пустая строка (просто Enter) оставляет поле неопределённым ('-').")
     print("-" * 60)
 
-    print("\n  Инструкция:")
-    print("  • Введите перевод требования")
-    print("  • Нажмите Enter без ввода, чтобы оставить исходное значение без изменений")
+    # 4 плоских мапы: {поставщик: значение}
+    location_map: Dict[str, str] = {}
+    city_map:     Dict[str, str] = {}
+    street_map:   Dict[str, str] = {}
+    building_map: Dict[str, str] = {}
 
-    # Создаем словарь для хранения переводов
-    translations = {}
+    # Запускаем пошаговый опрос без KeyboardInterrupt блоков
+    for i, supplier in enumerate(all_unique_suppliers, 1):
+        print(f"\n  [{i}/{total_suppliers}] Контрагент: {supplier}")
 
-    for i, value in enumerate(unique_values, 1):
-        print(f"\n  [{i}/{len(unique_values)}] Исходное значение: {value}")
+        location = ask_user_input("    1. Страна           (Location): ").strip()
+        city     = ask_user_input("    2. Город            (City):     ").strip()
+        street   = ask_user_input("    3. Улица            (Street):   ").strip()
+        building = ask_user_input("    4. Здание           (Building): ").strip()
 
-        while True:
-            try:
-                user_input = input("  Введите перевод (или Enter чтобы оставить без изменений): ").strip()
+        location_map[supplier] = location if location else '-'
+        city_map[supplier]     = city     if city     else '-'
+        street_map[supplier]   = street   if street   else '-'
+        building_map[supplier] = building if building else '-'
 
-                if user_input == '':
-                    translations[value] = value
-                    print(f"    → Оставляем без изменений: {value}")
-                else:
-                    translations[value] = f"{user_input}\n{value}"
-                    print(f"    → Сохранено: {user_input}\\n{value}")
-                break
-            except KeyboardInterrupt:
-                print()
-                while True:
-                    confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
-                    if confirm == 'да':
-                        print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-                        sys.exit(0)
-                    elif confirm == 'нет':
-                        print("\nПродолжаем работу...")
-                        break
-                    else:
-                        print("Пожалуйста, введите 'да' или 'нет'")
+        # Краткая сводка по введённым данным для визуального контроля
+        print(f"    ✓ Зафиксировано: {location_map[supplier]} | "
+              f"{city_map[supplier]} | {street_map[supplier]} | {building_map[supplier]}")
 
-    # Применяем переводы
-    df_bp_new['Interchangeable'] = df_bp_new['Interchangeable'].replace(translations)
-
-    # Показываем результат
-    print("\n  Результат перевода 'Interchangeable':")
-    result_df = df_bp_new[['Interchangeable']].drop_duplicates()
-    for _, row in result_df.iterrows():
-        val = row['Interchangeable']
-        if pd.isna(val):
-            display_value = ''
-        else:
-            val_str = str(val)
-            display_value = val_str if len(val_str) <= 60 else val_str[:57] + '...'
-        print(f"    {display_value}")
-
-    return df_bp_new
+    return {
+        'location': location_map,
+        'city':     city_map,
+        'street':   street_map,
+        'building': building_map,
+    }
 
 
-def save_processed_bp(df: pd.DataFrame, bp_number: str, base_dir: Optional[str] = None) -> str:
+def detect_workshop_by_code(
+    workcenter_code: str
+) -> Dict[str, str]:
     """
-    Сохраняет обработанный BP DataFrame в Excel файл внутри папки с датой.
-    
-    Папка: YYYY-MM-DD_processed_bp
-    Файл:  YYYY-MM-DD_BP<номер>.xlsx
-    
-    Параметры:
-        df: DataFrame для сохранения
-        bp_number: номер BP (например 'BP26002813')
-        base_dir: базовая директория (по умолчанию текущая рабочая папка)
-    
-    Возвращает:
-        str: полный путь к сохранённому файлу
+    Определяет код и название цеха по коду воркцентра (рабочей станции).
+
+    Логика:
+        - Код воркцентра имеет паттерн [Завод][Цех][Номер], например 'HAD112'.
+        - Первые две буквы (например 'HA') однозначно определяют цех.
+        - По префиксу находится код цеха через WORKSHOP_PREFIX_TO_CODE.
+        - По коду цеха находится название через WORKSHOPS.
+
+    Аргументы:
+        workcenter_code (str): Код воркцентра, например 'HAD112'.
+
+    Возвращается:
+        Dict[str, str]: Словарь вида
+            {'workshop_code': 'AS', 'workshop_name': 'Assembling'}.
+            Если код не распознан — оба поля равны '-'.
     """
-    if base_dir is None:
-        base_dir = os.getcwd()
+    empty_result = {'workshop_code': '-', 'workshop_name': '-'}
 
-    # Формируем имя папки с сегодняшней датой
-    today_str = datetime.now().strftime('%Y-%m-%d')
-    backup_folder = os.path.join(base_dir, f"{today_str}_processed_bp")
-    bp_folder = os.path.join(backup_folder, bp_number)
+    if not isinstance(workcenter_code, str) or len(workcenter_code) < 2:
+        return empty_result
 
-    if not os.path.exists(bp_folder):
-        os.makedirs(bp_folder)
-        print(f"Создана папка для BP {bp_number} для сохранения резервной копии и упаковочных документов.")
-    else:
-        print(f"Папка для BP {bp_number} уже существует.")
+    # Извлекаем префикс (первые две буквы)
+    prefix = workcenter_code[:2].upper()
 
-    # Имя файла
-    filename = f"{today_str}_{bp_number}.xlsx"
-    filepath = os.path.join(backup_folder, bp_number, filename)
+    workshop_code = WORKSHOP_PREFIX_TO_CODE.get(prefix)
+    if not workshop_code:
+        return empty_result
 
-    # Сохраняем DataFrame без индекса
+    workshop_name = WORKSHOPS.get(workshop_code, {}).get('name', '-')
+
+    return {
+        'workshop_code': workshop_code,
+        'workshop_name': workshop_name,
+    }
+
+
+def load_packing_list_file(
+    filename: str,
+    packing_dir: str = INPUT_PACKING_LIST_DIR
+) -> Optional[pd.DataFrame]:
+    """
+    Загружает упаковочный лист по имени файла из директории input_packing_list_files/.
+
+    Аргументы:
+        filename (str): Имя файла (с расширением или без).
+        packing_dir (str): Директория с упаковочными листами.
+
+    Возвращается:
+        Optional[pd.DataFrame]: DataFrame упаковочного листа или None при ошибке.
+    """
+    if not filename or not filename.strip():
+        return None
+
+    filename = filename.strip()
+
+    # Если расширение не указано — добавляем .xlsx
+    if not filename.lower().endswith(('.xlsx', '.xls')):
+        filename = filename + '.xlsx'
+
+    full_path = os.path.join(packing_dir, filename)
+
+    if not os.path.exists(full_path):
+        print(f"  [Ошибка] Файл '{filename}' не найден в '{packing_dir}'.")
+        return None
+
     try:
-        # Убеждаемся, что данные очищены от проблемных символов
-        df_to_save = clean_dataframe_strings(df)
-        df_to_save.to_excel(filepath, index=False)
-        print(f"  [Бэкап] Сохранён файл: {filepath}")
-        return filepath
+        df_batch = pd.read_excel(full_path, sheet_name=0)
+        print(f"  [Упаковка] Файл '{filename}' загружен ({df_batch.shape[0]} строк).")
+        return df_batch
     except PermissionError:
-        print(f"  [ОШИБКА] Нет прав для записи файла: {filepath}")
-        print("  Закройте файл, если он открыт в Excel, и попробуйте снова.")
-    except OSError as e:
-        print(f"  [ОШИБКА] Ошибка файловой системы: {e}")
+        print(f"  [Ошибка] Нет прав для чтения файла '{filename}'. Закройте его, если открыт в Excel.")
+        return None
+    except (pd.errors.EmptyDataError, pd.errors.ParserError) as e:
+        print(f"  [Ошибка] Файл '{filename}' повреждён: {e}")
+        return None
     except Exception as e:
-        print(f"  [ОШИБКА] Не удалось сохранить бэкап для {bp_number}: {e}")
-    return ""
+        print(f"  [Ошибка] Не удалось прочитать файл '{filename}': {e}")
+        return None
 
 
-def process_bp_file(bp_filename, df_bom):
+def parse_dimensions(
+    size_str: str
+) -> tuple:
     """
-    Обработка одного BP файла через 18 последовательных шагов.
+    Парсит строку размера в формате "Д×Ш×В" или "ДxШxВ" в кортеж из трёх float.
+
+    Поддерживаемые разделители:
+        - × (U+00D7, знак умножения)
+        - x / X (латинская)
+
+    Аргументы:
+        size_str (str): Строка размера, например "550×380×230".
+
+    Возвращается:
+        tuple: (length, width, height) как float или (np.nan, np.nan, np.nan),
+               если строку распарсить не удалось.
+    """
+    nan_result = (np.nan, np.nan, np.nan)
+
+    if not isinstance(size_str, str) or not size_str.strip():
+        return nan_result
+
+    # Нормализуем разделители: заменяем × и X на x
+    normalized = size_str.strip().replace('×', 'x').replace('X', 'x')
+
+    # Разбиваем по 'x'
+    parts = [p.strip() for p in normalized.split('x')]
+
+    if len(parts) != 3:
+        return nan_result
+
+    try:
+        length = float(parts[0])
+        width = float(parts[1])
+        height = float(parts[2])
+        return (length, width, height)
+    except (ValueError, TypeError):
+        return nan_result
+
+
+def collect_unique_parts(
+    df: pd.DataFrame,
+    part_col: str,
+    name_col: str
+) -> Tuple[Dict[str, List[Hashable]], Dict[str, str]]:
+    """
+    Собирает уникальные детали и их индексы из матрицы Before/After.
+
+    Одним проходом формирует два словаря:
+        - parts_map: {part_no: [индексы строк]}
+        - names_map: {part_no: название детали}
+
+    Аргументы:
+        df (pd.DataFrame): Текущая матрица Before/After.
+        part_col (str):    Имя колонки с номером детали
+                           ('Part No. Before' / 'Part No. After').
+        name_col (str):    Имя колонки с названием детали
+                           ('Part Name Before' / 'Part Name After').
+
+    Возвращается:
+        Tuple[Dict[str, List[Hashable]], Dict[str, str]]:
+            - parts_map: {part_no: [индексы]}
+            - names_map: {part_no: имя}
+    """
+    parts_map: Dict[str, List[Hashable]] = {}
+    names_map: Dict[str, str] = {}
+
+    for idx, row in df.iterrows():
+        part_no = str(row.get(part_col, '')).strip()
+        if not part_no or part_no == '-':
+            continue
+
+        part_name = str(row.get(name_col, '')).strip()
+        if part_no not in parts_map:
+            parts_map[part_no] = []
+            names_map[part_no] = part_name
+        parts_map[part_no].append(idx)
+
+    return parts_map, names_map
+
+
+def calculate_packaging_metrics(
+    packaging: Dict[str, Any]
+) -> Dict[str, float]:
+    """
+    Рассчитывает производные упаковочные метрики (площади/объёмы коробки и паллеты).
+
+    Аргументы:
+        packaging (Dict[str, Any]): Словарь от extract_packaging_data() с ключами
+                                    'box_size' и 'pallet_size'.
+
+    Возвращается:
+        Dict[str, float]: Словарь с ключами:
+            - 'box_len', 'box_w', 'box_h'
+            - 'box_space', 'box_volume'
+            - 'pal_len', 'pal_w', 'pal_h'
+            - 'pal_space', 'pal_volume'
+        Все значения — float или np.nan.
+    """
+    box_size_str = str(packaging.get('box_size') or '')
+    pallet_size_str = str(packaging.get('pallet_size') or '')
+
+    box_len, box_w, box_h = parse_dimensions(box_size_str)
+    pal_len, pal_w, pal_h = parse_dimensions(pallet_size_str)
+
+    box_space = round(box_len * box_w / 1_000_000, 2) if not any(pd.isna([box_len, box_w])) else np.nan
+    box_volume = round(box_len * box_w * box_h / 1_000_000_000, 2) if not any(pd.isna([box_len, box_w, box_h])) else np.nan
+    pal_space = round(pal_len * pal_w / 1_000_000, 2) if not any(pd.isna([pal_len, pal_w])) else np.nan
+    pal_volume = round(pal_len * pal_w * pal_h / 1_000_000_000, 2) if not any(pd.isna([pal_len, pal_w, pal_h])) else np.nan
+
+    return {
+        'box_len': box_len, 'box_w': box_w, 'box_h': box_h,
+        'box_space': box_space, 'box_volume': box_volume,
+        'pal_len': pal_len, 'pal_w': pal_w, 'pal_h': pal_h,
+        'pal_space': pal_space, 'pal_volume': pal_volume,
+    }
+
+
+def get_packaging_user_inputs(
+    part_no: str,
+    part_name: str,
+    branch: str
+) -> Dict[str, Any]:
+    """
+    Интерактивный ввод пользовательских упаковочных полей для одной детали:
+        - Box Type        (меню PACKAGING_TYPE)
+        - Box Stacking    (int ≥ 1 или Enter → np.nan)
+        - Pallet Type     (меню PACKAGING_TYPE)
+        - Pallet Stacking (int ≥ 1 или Enter → np.nan)
+
+    Аргументы:
+        part_no (str):   Номер детали.
+        part_name (str): Название детали.
+        branch (str):    Ветка ('Before' / 'After').
+
+    Возвращается:
+        Dict[str, Any]: Словарь с ключами:
+            - 'box_type' (str | float):      Тип коробки или np.nan
+            - 'box_stacking' (int | float):  Штабелирование или np.nan
+            - 'pallet_type' (str | float):   Тип паллеты или np.nan
+            - 'pallet_stacking' (int | float): Штабелирование паллеты или np.nan
+    """
+    print(f"\n  [{branch}] Упаковочные параметры для {part_no}")
+    display_name = part_name[:70] + '...' if len(part_name) > 70 else part_name
+    print(f"  Название: {display_name}")
+
+    # --- Box Type ---
+    print(f"\n  Доступные типы упаковки: {', '.join(PACKAGING_TYPE)}")
+    while True:
+        box_type = ask_user_input(
+            "  Box Type [Enter — пропустить]: "
+        ).strip()
+        if not box_type:
+            box_type = np.nan
+            print("    → Оставлено пустым (np.nan)")
+            break
+        if box_type.lower() in [t.lower() for t in PACKAGING_TYPE]:
+            print(f"    ✓ Зафиксировано Box Type: '{box_type}'")
+            break
+        print(f"  [Ошибка] Недопустимый тип. Выберите из: {', '.join(PACKAGING_TYPE)}")
+
+    # --- Box Stacking ---
+    box_stacking = ask_int_or_nan("  Box Stacking (units, целое ≥ 1) [Enter — пропустить]: ")
+
+    # --- Pallet Type ---
+    print(f"\n  Доступные типы паллет: {', '.join(PACKAGING_TYPE)}")
+    while True:
+        pallet_type = ask_user_input(
+            "  Pallet Type [Enter — пропустить]: "
+        ).strip()
+        if not pallet_type:
+            pallet_type = np.nan
+            print("    → Оставлено пустым (np.nan)")
+            break
+        if pallet_type.lower() in [t.lower() for t in PACKAGING_TYPE]:
+            print(f"    ✓ Зафиксировано Pallet Type: '{pallet_type}'")
+            break
+        print(f"  [Ошибка] Недопустимый тип. Выберите из: {', '.join(PACKAGING_TYPE)}")
+
+    # --- Pallet Stacking ---
+    pallet_stacking = ask_int_or_nan("  Pallet Stacking (units, целое ≥ 1) [Enter — пропустить]: ")
+
+    return {
+        'box_type': box_type,
+        'box_stacking': box_stacking,
+        'pallet_type': pallet_type,
+        'pallet_stacking': pallet_stacking,
+    }
+
+
+def apply_packaging_to_rows(
+    df: pd.DataFrame,
+    parts_map: Dict[str, List[Hashable]],
+    part_no: str,
+    packaging: Optional[Dict[str, Any]],
+    user_inputs: Dict[str, Any],
+    branch: str
+) -> None:
+    """
+    Заполняет все 18 упаковочных колонок для одной детали и всех её дубликатов.
+
+    Источники данных:
+        - packaging (Dict | None):   данные из упаковочного листа + расчёты;
+        - user_inputs (Dict):        пользовательский ввод (тип, штабелирование).
+
+    Если packaging is None — все поля из файла заполняются np.nan.
+    Если какое-то поле в packaging == np.nan — соответствующая колонка = np.nan.
+    Box Net Weight считается как part_net_weight × parts_qty_box; если любой из
+    сомножителей np.nan — результат np.nan.
+
+    Аргументы:
+        df (pd.DataFrame):          Матрица для заполнения.
+        parts_map (Dict):           {part_no: [индексы строк]}.
+        part_no (str):              Номер детали.
+        packaging (Optional[Dict]): Словарь от extract_packaging_data() или None.
+        user_inputs (Dict):         Словарь от get_packaging_user_inputs().
+        branch (str):               Ветка ('Before' / 'After').
+    """
+    # Значения по умолчанию (если упаковочный лист не найден)
+    parts_qty_box = np.nan
+    boxes_per_pallet = np.nan
+    pallet_gross_weight = np.nan
+    part_net_weight = np.nan
+    metrics: Dict[str, float] = {
+        'box_len': np.nan, 'box_w': np.nan, 'box_h': np.nan,
+        'box_space': np.nan, 'box_volume': np.nan,
+        'pal_len': np.nan, 'pal_w': np.nan, 'pal_h': np.nan,
+        'pal_space': np.nan, 'pal_volume': np.nan,
+    }
+
+    # Источник A: упаковочный лист + расчёт
+    if packaging is not None:
+        metrics = calculate_packaging_metrics(packaging)
+        parts_qty_box = packaging.get('parts_qty_box', np.nan)
+        boxes_per_pallet = packaging.get('boxes_per_pallet', np.nan)
+        pallet_gross_weight = packaging.get('pallet_gross_weight', np.nan)
+        part_net_weight = packaging.get('part_net_weight', np.nan)
+
+    # Расчёт Box Net Weight = part_net_weight × parts_qty_box
+    if pd.notna(part_net_weight) and pd.notna(parts_qty_box):
+        box_net_weight = part_net_weight * parts_qty_box
+    else:
+        box_net_weight = np.nan
+
+    # Заполняем все строки детали (включая дубликаты)
+    for idx in parts_map[part_no]:
+        df.at[idx, f'Quantity per Box {branch}'] = parts_qty_box
+        df.at[idx, f'Box Type {branch}'] = user_inputs['box_type']
+        df.at[idx, f'Box Length {branch} mm'] = metrics['box_len']
+        df.at[idx, f'Box Width {branch} mm'] = metrics['box_w']
+        df.at[idx, f'Box Height {branch} mm'] = metrics['box_h']
+        df.at[idx, f'Box Area {branch} m2'] = metrics['box_space']
+        df.at[idx, f'Box Volume {branch} m3'] = metrics['box_volume']
+        df.at[idx, f'Box Net Weight {branch} kg'] = box_net_weight
+        df.at[idx, f'Box Stacking {branch} units'] = user_inputs['box_stacking']
+        df.at[idx, f'Boxes per Pallet {branch} units'] = boxes_per_pallet
+        df.at[idx, f'Pallet Type {branch}'] = user_inputs['pallet_type']
+        df.at[idx, f'Pallet Length {branch} mm'] = metrics['pal_len']
+        df.at[idx, f'Pallet Width {branch} mm'] = metrics['pal_w']
+        df.at[idx, f'Pallet Height {branch} mm'] = metrics['pal_h']
+        df.at[idx, f'Pallet Area {branch} m2'] = metrics['pal_space']
+        df.at[idx, f'Pallet Volume {branch} m3'] = metrics['pal_volume']
+        df.at[idx, f'Pallet Gross Weight {branch} kg'] = pallet_gross_weight
+        df.at[idx, f'Pallet Stacking {branch} units'] = user_inputs['pallet_stacking']
+
+
+def copy_packaging_before_to_after(
+    df: pd.DataFrame,
+    before_parts: Dict[str, List[Hashable]],
+    after_parts: Dict[str, List[Hashable]]
+) -> Dict[str, str]:
+    """
+    Автоматически копирует все 18 упаковочных полей Before → After
+    для After-деталей, чей номер совпадает с номером Before-детали.
+
+    Копирование выполняется только для пар с одинаковым Part No.:
+    это означает, что деталь не изменилась, и её упаковка идентична.
+
+    Аргументы:
+        df (pd.DataFrame):            Матрица Before/After.
+        before_parts (Dict):          {part_no: [индексы Before-строк]}.
+        after_parts (Dict):           {part_no: [индексы After-строк]}.
+
+    Возвращается:
+        Dict[str, str]: {part_no: part_no} — словарь After-деталей,
+                        для которых выполнено автокопирование.
+    """
+    copied_parts: Dict[str, str] = {}
+
+    for part_no, after_idx_list in after_parts.items():
+        if part_no not in before_parts:
+            continue
+
+        # Берём упаковочные данные из первой Before-строки этой детали
+        # (все строки одной детали имеют одинаковые упаковочные поля)
+        before_idx = before_parts[part_no][0]
+
+        # Копируем все 18 полей во все After-строки этой детали (включая дубликаты)
+        for idx in after_idx_list:
+            df.at[idx, 'Quantity per Box After'] = df.at[before_idx, 'Quantity per Box Before']
+            df.at[idx, 'Box Type After'] = df.at[before_idx, 'Box Type Before']
+            df.at[idx, 'Box Length After mm'] = df.at[before_idx, 'Box Length Before mm']
+            df.at[idx, 'Box Width After mm'] = df.at[before_idx, 'Box Width Before mm']
+            df.at[idx, 'Box Height After mm'] = df.at[before_idx, 'Box Height Before mm']
+            df.at[idx, 'Box Area After m2'] = df.at[before_idx, 'Box Area Before m2']
+            df.at[idx, 'Box Volume After m3'] = df.at[before_idx, 'Box Volume Before m3']
+            df.at[idx, 'Box Net Weight After kg'] = df.at[before_idx, 'Box Net Weight Before kg']
+            df.at[idx, 'Box Stacking After units'] = df.at[before_idx, 'Box Stacking Before units']
+            df.at[idx, 'Boxes per Pallet After units'] = df.at[before_idx, 'Boxes per Pallet Before units']
+            df.at[idx, 'Pallet Type After'] = df.at[before_idx, 'Pallet Type Before']
+            df.at[idx, 'Pallet Length After mm'] = df.at[before_idx, 'Pallet Length Before mm']
+            df.at[idx, 'Pallet Width After mm'] = df.at[before_idx, 'Pallet Width Before mm']
+            df.at[idx, 'Pallet Height After mm'] = df.at[before_idx, 'Pallet Height Before mm']
+            df.at[idx, 'Pallet Area After m2'] = df.at[before_idx, 'Pallet Area Before m2']
+            df.at[idx, 'Pallet Volume After m3'] = df.at[before_idx, 'Pallet Volume Before m3']
+            df.at[idx, 'Pallet Gross Weight After kg'] = df.at[before_idx, 'Pallet Gross Weight Before kg']
+            df.at[idx, 'Pallet Stacking After units'] = df.at[before_idx, 'Pallet Stacking Before units']
+
+        copied_parts[part_no] = part_no
+
+    return copied_parts
+
+
+@lru_cache(maxsize=1)
+def load_configuration_file(
+    config_dir: str = INPUT_CONFIGURATION_DIR
+) -> Optional[pd.DataFrame]:
+    """
+    Ленивая загрузка конфигурационного файла configuration.xlsx из
+    input_files/input_configuration_files/.
+
+    Функция декорирована lru_cache(maxsize=1) — файл читается один раз
+    за сессию, повторные вызовы возвращают закэшированный результат.
+    Для сброса кэша используйте load_configuration_file.cache_clear().
+
+    Возвращается:
+        Optional[pd.DataFrame]: DataFrame с конфигурацией или None, если файл
+                                не найден или не удалось прочитать.
+    """
+    latest_file = find_latest_excel_file(
+        file_prefix=CONFIGURATION_PREFIX,
+        file_path=config_dir
+    )
+
+    if not latest_file:
+        print(f"  [Конфигурация] Файл не найден в '{config_dir}'.")
+        return None
+
+    required_cols = CONF_TO_KEEP_COLS
+
+    df_raw = read_excel_file(
+        filename=latest_file,
+        file_path=config_dir,
+        sheet_name='common',
+        cols=required_cols
+    )
+
+    if df_raw is None or df_raw.empty:
+        print("  [Конфигурация] Не удалось прочитать данные или файл пуст.")
+        return None
+
+    df_clean = normalize_data(df_raw)
+    print(f"  [Конфигурация] Загружено {len(df_clean)} записей из '{latest_file}'.")
+    return df_clean
+
+
+def process_bp_file(
+    bp_filename: str
+) -> Optional[Dict[str, Any]]:
+    """
+    Конвейер сквозной интерактивной обработки одного файла технического изменения (BP).
 
     Каждый шаг включает:
     - Интерактивное взаимодействие с пользователем
@@ -1653,770 +1048,1632 @@ def process_bp_file(bp_filename, df_bom):
 
     Аргументы:
         bp_filename (str): Имя файла BP для обработки.
-        df_bom (pd.DataFrame): DataFrame с данными BOM для проверки наличия деталей.
 
     Возвращается:
         dict: Словарь вида {'bp_number': str, 'dataframe': pd.DataFrame}
               или None при критической ошибке.
 
     Шаги обработки:
-        1. Загрузка BP файла
-        2. Выбор нужных колонок
-        3. Выбор статуса тех. изменения
-        4. Заполнение пустых значений
-        5. Ввод количества деталей в SS
-        6. Перевод названий деталей
-        7. Поиск официальных названий поставщиков
-        8. Ввод статуса локализации поставщиков
-        9. Фильтрация китайских символов в описании и решении
-        10. Перевод описания к изменению
-        11. Перевод решения к изменению
-        12. Обработка цветов и Color Code
-        13. Обработка рабочих центров
-        14. Перевод требований по утилизации старых деталей
-        15. Перевод требований по взаимозаменяемости
-        16. Проверка наличия деталей в BOM
-        17. Упорядочивание колонок
-        18. Сохранение результата
+        ШАГ 1: ЗАГРУЗКА, АУДИТ И НОРМАЛИЗАЦИЯ ДАННЫХ (BP<номер>.xlsx)
+        ШАГ 2: РАЗДЕЛЕНИЕ ДЕТАЛЕЙ НА СТАРЫЕ И НОВЫЕ (BEFORE / AFTER)
+        ШАГ 3: ОПРЕДЕЛЕНИЕ СТАТУСА (Status)
+        ШАГ 4: ОПРЕДЕЛЕНИЕ НАЗВАНИЙ МОДЕЛЕЙ ПО КОДАМ (BOM Product Code -> BOM Product Name)
+        ШАГ 5: ВВОД ФАКТИЧЕСКОЙ ПАРТИИ (Batch Fact)
+        ШАГ 6: ВВОД ФАКТИЧЕСКОЙ ДАТЫ (Change Date)
+        ШАГ 7: ВВОД КОЛИЧЕСТВА BEFORE-ДЕТАЛЕЙ В SAFETY STOCK (Quantity Parts in SS)
+        ШАГ 8: ПЕРЕВОД НАЗВАНИЙ ДЕТАЛЕЙ (Part Name Before / After)
+        ШАГ 9: ПЕРЕВОД ОФИЦИАЛЬНЫХ НАЗВАНИЙ ПОСТАВЩИКОВ (Supplier Name Before / After)
+        ШАГ 10: ВВОД СТАТУСА ЛОКАЛИЗАЦИИ ПОСТАВЩИКОВ (Localization Before / After)
+        ШАГ 11: ВВОД ДАННЫХ О МЕСТОПОЛОЖЕНИИ BEFORE-ПОСТАВЩИКОВ
+        ШАГ 12: ВВОД ДАННЫХ О МЕСТОПОЛОЖЕНИИ AFTER-ПОСТАВЩИКОВ
+        ШАГ 13: ПЕРЕВОД ОПИСАНИЯ К ИЗМЕНЕНИЮ (Change Description)
+        ШАГ 14: ПЕРЕВОД РЕШЕНИЯ К ИЗМЕНЕНИЮ (Change Solution)
+        ШАГ 15: ПЕРЕВОД ЦВЕТА (Color Code и Color Name)
+        ШАГ 16: ОБРАБОТКА ЦЕХОВ И РАБОЧИХ СТАНЦИЙ (Workshop/Workcenter Code/Name Before/After)
+        ШАГ 17: ПЕРЕВОД РЕБОВАНИЙ ПО УТИЛИЗАЦИИ СТАРЫХ ДЕТАЛЕЙ (Production Part Disposal)
+        ШАГ 18: ПЕРЕВОД ТРЕБОВАНИЙ ПО ВЗАИМОЗАМЕНЯЕМОСТИ (Interchangeable)
+        ШАГ 19: ЗАГРУЗКА КОНФИГУРАЦИОННОГО ФАЙЛА (YYYY-mm-dd_configuration.xlsx)
+        ШАГ 20: РАСЧЁТ ПАРТИЙ В SAFETY STOCK (Quantity Batches in SS)
+        ШАГ 21: ПОИСК КОНФИГУРАЦИИ ДЛЯ УТИЛИЗАЦИИ BEFORE-ДЕТАЛЕЙ
+        ШАГ 22: ПОИСК УПАКОВОЧНЫХ ДАННЫХ ДЛЯ BEFORE-ДЕТАЛЕЙ
+        ШАГ 23: ПОИСК УПАКОВОЧНЫХ ДАННЫХ ДЛЯ AFTER-ДЕТАЛЕЙ
+        ШАГ 24: УПОРЯДОЧИВАНИЕ КОЛОНОК
+        ШАГ 25: СОХРАНЕНИЕ РЕЗУЛЬТАТА
     """
-    # НАЧАЛО ЗАМЕРА ВРЕМЕНИ
     bp_start_time = time.time()
+    bp_number = os.path.basename(bp_filename).replace('.xlsx', '').replace('.XLSX', '')
 
-    print(f"\nОбработка файла: {bp_filename}")
+    bp_dir = os.path.dirname(bp_filename)
+    bp_pure_name = os.path.basename(bp_filename)
 
-    bp_number = bp_filename.replace('.xlsx', '')
-    saved_state = None  # Инициализируем сохранённое состояние
+    # Инициализируем сквозные переменные конвейера
+    saved_state: Optional[pd.DataFrame] = None
+    df_matrix: Optional[pd.DataFrame] = None
 
-    # Шаг 1: Загрузка BP файла
-    while True:
-        step_start = time.time()  # Замер времени для шага
-        print_step_header(1, 17, "Загрузка BP файла")
-        df_bp = load_excel_file(bp_filename, "BP файл")
-        if df_bp is None:
-            return None
-        show_dataframe_preview(df_bp, "Загрузка исходного BP файла")
+    # Счётчики для нумерации шагов
+    bp_total_steps = 25
+    counter = 0
 
-        # Сохраняем состояние после Шага 1
-        saved_state = save_state_before_step(df_bp)
 
-        continue_flag, df_bp, saved_state = confirm_step("Загрузка BP файла", df_bp, saved_state)
-        if continue_flag:
-            step_elapsed = time.time() - step_start
-            print(f"  [Время шага 1: {timedelta(seconds=int(step_elapsed))}]")
-            break
-        # retry - повторяем шаг 1
-
-    # Шаг 2: Выбор нужных колонок
-    while True:
-        step_start = time.time()
-        print_step_header(2, 17, "Выбор нужных колонок")
-        bp_columns_to_keep = [
-            'Change', 'BOM Product', 'Update Type', 'Part No.', 'Part Name(CHN)',
-            'Quantity', 'Supplier Name', 'Change Description', 'Solution',
-            'Color Code', 'Color Name', 'Production Part Disposal',
-            'Interchangeable', 'In Stock', 'New Part Available Date',
-            'Workcenter No.', 'Workcenter Name',
-        ]
-
-        available_cols = [col for col in bp_columns_to_keep if col in df_bp.columns]
-        missing_cols = set(bp_columns_to_keep) - set(available_cols)
-        if missing_cols:
-            print(f"Внимание: Отсутствуют колонки: {missing_cols}")
-
-        if not available_cols:
-            print("Ошибка: В файле нет ни одной необходимой колонки")
-            return None
-
-        df_bp_new = df_bp[available_cols].copy()
-        df_bp_new['BP_No'] = bp_number
-
-        show_dataframe_preview(
-            df_bp_new, "Выбор нужных колонок",
-            focus_columns=['BP_No', 'Change', 'BOM Product', 'Update Type', 'Part No.', 'Part Name(CHN)']
-        )
-
-        continue_flag, df_bp_new, saved_state = confirm_step("Выбор нужных колонок", df_bp_new, saved_state)
-        if continue_flag:
-            step_elapsed = time.time() - step_start
-            print(f"  [Время шага 2: {timedelta(seconds=int(step_elapsed))}]")
-            break
-        # retry - повторяем шаг 2
-
-    # Шаг 3: Выбор статуса тех. изменения
-    while True:
-        step_start = time.time()
-        print_step_header(3, 17, "Выбор статуса тех. изменения")
-        if 'Status' not in df_bp_new.columns or df_bp_new['Status'].iloc[0] == '-':
-            status = get_bp_status(bp_number)
-            df_bp_new['Status'] = status
-        else:
-            print(f"  Статус для BP {bp_number} уже задан: {df_bp_new['Status'].iloc[0]}")
-        show_dataframe_preview(
-            df_bp_new, "Выбор статуса тех. изменения",
-            focus_columns=['BP_No', 'Status', 'BOM Product', 'Update Type', 'Part No.', 'Part Name(CHN)']
-        )
-
-        continue_flag, df_bp_new, saved_state = confirm_step("Выбор статуса тех. изменения", df_bp_new, saved_state)
-        if continue_flag:
-            step_elapsed = time.time() - step_start
-            print(f"  [Время шага 3: {timedelta(seconds=int(step_elapsed))}]")
-            break
-        # retry - повторяем шаг 3
-
-    # Шаг 4: Ввод количества деталей в SS
-    while True:
-        step_start = time.time()
-        print_step_header(4, 17, "Ввод количества деталей в SS")
-        quantity_dict = get_quantity_in_ss(df_bp_new, bp_number)
-        df_bp_new['Quantity in SS'] = df_bp_new['Part No.'].map(quantity_dict).fillna(0).astype(int)
-
-        show_dataframe_preview(
-            df_bp_new, "Ввод количества деталей в SS",
-            focus_columns=['BP_No', 'Status', 'BOM Product', 'Update Type', 'Part No.', 'Part Name (CHN)', 'Quantity in SS']
-        )
-
-        continue_flag, df_bp_new, saved_state = confirm_step(
-            "Ввод количества деталей в SS", df_bp_new, saved_state
-        )
-        if continue_flag:
-            step_elapsed = time.time() - step_start
-            print(f"  [Время шага 4: {timedelta(seconds=int(step_elapsed))}]")
-            break
-        # retry - повторяем шаг 4
-
-    # Шаг 5: Перевод названий деталей
-    while True:
-        step_start = time.time()
-        print_step_header(5, 17, "Перевод названий деталей")
-        if 'Part Name(CHN)' in df_bp_new.columns:
-            unique_parts = get_unique_non_empty_values(df_bp_new['Part Name(CHN)'], 'Part Name(CHN)')
-
-            if len(unique_parts) > 0:
-                part_translations = interactive_translation(unique_parts, "названий деталей")
-                df_bp_new['Part Name (RUS)'] = df_bp_new['Part Name(CHN)'].map(part_translations).fillna('-')
-                df_bp_new = df_bp_new.drop(['Part Name(CHN)'], axis=1)
-            else:
-                print("  Колонка 'Part Name(CHN)': все значения равны '-' или пустые. Перевод не требуется.")
-                df_bp_new['Part Name (RUS)'] = '-'
-                df_bp_new = df_bp_new.drop(['Part Name(CHN)'], axis=1)
-            show_dataframe_preview(
-                df_bp_new, "Перевод названий деталей (после)",
-                focus_columns=['BP_No', 'Status', 'BOM Product', 'Update Type', 'Part No.', 'Part Name (RUS)']
-            )
-
-        continue_flag, df_bp_new, saved_state = confirm_step(
-            "Перевод названий деталей", df_bp_new, saved_state
-        )
-        if continue_flag:
-            step_elapsed = time.time() - step_start
-            print(f"  [Время шага 5: {timedelta(seconds=int(step_elapsed))}]")
-            break
-        # retry - повторяем шаг 5
-
-    # Шаг 6: Поиск официальных названий поставщиков
-    while True:
-        step_start = time.time()
-        print_step_header(6, 17, "Поиск официальных названий поставщиков")
-        if 'Supplier Name' in df_bp_new.columns:
-            unique_suppliers = get_unique_non_empty_values(df_bp_new['Supplier Name'], 'Supplier Name')
-
-            if len(unique_suppliers) > 0:
-                supplier_translations = interactive_translation(unique_suppliers, "поставщиков")
-                df_bp_new['Supplier Name (RUS)'] = df_bp_new['Supplier Name'].map(supplier_translations).fillna('-')
-                df_bp_new = df_bp_new.drop(['Supplier Name'], axis=1)
-            else:
-                print("  Колонка 'Supplier Name': все значения равны '-' или пустые. Перевод не требуется.")
-                df_bp_new['Supplier Name (RUS)'] = '-'
-                df_bp_new = df_bp_new.drop(['Supplier Name'], axis=1)
-            show_dataframe_preview(
-                df_bp_new, "Поиск официальных названий поставщиков (после)",
-                focus_columns=['BP_No', 'Status', 'BOM Product', 'Update Type', 'Part No.', 'Part Name (RUS)', 'Supplier Name (RUS)']
-            )
-
-        continue_flag, df_bp_new, saved_state = confirm_step("Поиск официальных названий поставщиков", df_bp_new, saved_state)
-        if continue_flag:
-            step_elapsed = time.time() - step_start
-            print(f"  [Время шага 6: {timedelta(seconds=int(step_elapsed))}]")
-            break
-        # retry - повторяем шаг 6
-
-    # Шаг 7: Ввод статуса локализации поставщиков
-    while True:
-        step_start = time.time()
-        print_step_header(7, 17, "Ввод статуса локализации поставщиков")
-        df_bp_new = get_supplier_localization_status(df_bp_new, bp_number)
-        show_dataframe_preview(
-            df_bp_new, "Ввод статуса локализации поставщиков",
-            focus_columns=['BP_No', 'Status', 'BOM Product', 'Update Type', 'Part No.', 'Part Name (RUS)', 'Supplier Name (RUS)', 'Localization']
-        )
-
-        continue_flag, df_bp_new, saved_state = confirm_step(
-            "Ввод статуса локализации поставщиков", df_bp_new, saved_state
-        )
-        if continue_flag:
-            step_elapsed = time.time() - step_start
-            print(f"  [Время шага 7: {timedelta(seconds=int(step_elapsed))}]")
-            break
-        # retry - повторяем шаг 7
-
-    # Шаг 8: Фильтрация китайских символов
+    #=============== ШАГ 1: ЗАГРУЗКА, АУДИТ И НОРМАЛИЗАЦИЯ ДАННЫХ (BP<номер>.xlsx) ===============
+    counter += 1
     step_start = time.time()
-    print_step_header(8, 17, "Фильтрация китайских символов")
-    if 'Change Description' in df_bp_new.columns:
-        df_bp_new['Change Description'] = df_bp_new['Change Description'].apply(filter_chinese_lines)
-        print("  Колонка 'Change Description': фильтрация выполнена")
-    if 'Solution' in df_bp_new.columns:
-        df_bp_new['Solution'] = df_bp_new['Solution'].apply(filter_chinese_lines)
-        print("  Колонка 'Solution': фильтрация выполнена")
-    step_elapsed = time.time() - step_start
-    print(f"  [Время шага 8: {timedelta(seconds=int(step_elapsed))}]")
+    step_name = f"ШАГ {counter}: [{bp_pure_name}] ЗАГРУЗКА, АУДИТ И НОРМАЛИЗАЦИЯ ДАННЫХ"
+    print_step_header(counter, bp_total_steps, step_name)
 
-    # Шаг 9: Перевод описания
     while True:
-        step_start = time.time()
-        print_step_header(9, 17, "Перевод описания к изменению")
-        if 'Change Description' in df_bp_new.columns:
-            unique_descs = get_unique_non_empty_values(df_bp_new['Change Description'], 'Change Description')
+        df_raw: Optional[pd.DataFrame] = read_excel_file(filename=bp_pure_name, file_path=bp_dir)
 
-            if len(unique_descs) > 0:
-                desc_translations = interactive_translation(unique_descs, "описаний изменений")
-                df_bp_new['Change Description (RUS)'] = df_bp_new['Change Description'].map(desc_translations).fillna('-')
-                df_bp_new = df_bp_new.drop(['Change Description'], axis=1)
+        if df_raw is None or df_raw.empty:
+            print(f"  [Критический сбой] Не удалось прочитать данные из файла {bp_pure_name}.")
+            return None
+
+        # Принудительно очищаем сами имена колонок от случайных пробелов оператора
+        df_raw.columns = [str(col).strip() for col in df_raw.columns]
+
+        available_cols = [col for col in BP_GMOM_TO_KEEP_COLS if col in df_raw.columns]
+        missing_cols = set(BP_GMOM_TO_KEEP_COLS) - set(available_cols)
+
+        if missing_cols:
+            print("\n  " + "!" * 60)
+            print(f"  [ВНИМАНИЕ] В структуре файла {bp_pure_name} не найдены обязательные колонки!")
+            print("  " + "!" * 60)
+            print("  Отсутствуют столбцы:")
+            for col in missing_cols:
+                print(f"    - {col}")
+
+            print("\n  Варианты решения проблемы:")
+            print("    Нажмите: 1 - Исправить заголовки вручную (откройте файл в Excel, переименуйте колонки по списку ниже и повторите проверку)")
+            print("    Нажмите: 2 - Пропустить этот BP файл (конвейер перейдет к обработке следующего файла изменений)")
+
+            print("\n  Обязательный целевой формат заголовков:")
+            print(f"    {', '.join(STEP_FOCUS_COLUMNS_MAP[counter - 1])}")
+            print("-" * 60)
+
+            while True:
+                user_choice = ask_user_input("  Выберите вариант действия (1 или 2): ").strip()
+                if user_choice in ('1', '2'):
+                    break
+                print("  Некорректный ввод. Пожалуйста, введите цифру 1 или 2.")
+
+            if user_choice == '1':
+                print("\n  [Ожидание] Скрипт приостановлен.")
+                print(f"  Пожалуйста, откройте файл '{os.path.join(bp_dir, bp_pure_name)}', скорректируйте имена колонок и сохраните его.")
+                wait_for_user("  После сохранения файла нажмите Enter, чтобы запустить повторную загрузку...")
+                continue
+            elif user_choice == '2':
+                print(f"\n  [Пропуск] Файл '{bp_pure_name}' исключен из текущей сессии обработки.")
+                return {"status": "SKIP_FILE"}
+
+        df_filtered: pd.DataFrame = df_raw[available_cols].copy()
+
+        df_step = normalize_data(
+            df_filtered,
+            int_columns=BP_GBOM_INT_COLS,
+            float_columns=None,
+            datetime_columns=BP_GBOM_DATETIME_COLS
+        )
+
+        df_step['BP_No'] = bp_number
+
+        show_dataframe_preview(
+            df_step,
+            step_name=step_name,
+            focus_columns=STEP_FOCUS_COLUMNS_MAP[counter - 1]
+        )
+
+        saved_state = save_state(df_step)
+
+        continue_flag, df_step, saved_state = confirm_step(
+            step_name=step_name,
+            df_current=df_step,
+            saved_state=saved_state
+        )
+
+        if continue_flag:
+            df_matrix = df_step
+            step_elapsed = time.time() - step_start
+            print(f"    [Успех] Шаг {counter} успешно выполнен за {timedelta(seconds=int(step_elapsed))}")
+            break
+
+
+    #=============== ШАГ 2: РАЗДЕЛЕНИЕ ДЕТАЛЕЙ НА СТАРЫЕ И НОВЫЕ (BEFORE / AFTER) ===============
+    counter += 1
+    step_start = time.time()
+    step_name = f"ШАГ {counter}: [{bp_number}] РАЗДЕЛЕНИЕ ДЕТАЛЕЙ НА СТАРЫЕ И НОВЫЕ (BEFORE / AFTER)"
+    print_step_header(counter, bp_total_steps, step_name)
+
+    while True:
+        list_of_pair_dicts = find_pairs(df_matrix)
+        df_step = pd.DataFrame(list_of_pair_dicts)
+
+        if df_step.empty:
+            print(f"  [Критическая ошибка] Алгоритм find_pairs() вернул пустой массив для {bp_number}!")
+            return None
+
+        show_dataframe_preview(
+            df_step,
+            step_name=step_name,
+            focus_columns=STEP_FOCUS_COLUMNS_MAP[counter - 1]
+        )
+
+        saved_state = save_state(df_step)
+
+        continue_flag, df_step, saved_state = confirm_step(
+            step_name=step_name,
+            df_current=df_step,
+            saved_state=saved_state
+        )
+
+        if continue_flag:
+            df_matrix = df_step
+            step_elapsed = time.time() - step_start
+            print(f"    [Успех] Шаг {counter} успешно выполнен за {timedelta(seconds=int(step_elapsed))}")
+            break
+        # При 'retry' цикл начнется сначала, позволяя разделить детали на старые и новые заново
+
+
+    #=============== ШАГ 3: ОПРЕДЕЛЕНИЕ СТАТУСА (Status) ===============
+    counter += 1
+    step_start = time.time()
+    step_name = f"ШАГ {counter}: [{bp_number}] ОПРЕДЕЛЕНИЕ СТАТУСА"
+    print_step_header(counter, bp_total_steps, step_name)
+
+    while True:
+        df_step = df_matrix.copy()
+        status_value = get_bp_status(bp_number)
+        df_step['Status'] = status_value
+
+        show_dataframe_preview(
+            df_step,
+            step_name=step_name,
+            focus_columns=STEP_FOCUS_COLUMNS_MAP[counter - 1]
+        )
+
+        saved_state = save_state(df_step)
+
+        continue_flag, df_step, saved_state = confirm_step(
+            step_name=step_name,
+            df_current=df_step,
+            saved_state=saved_state
+        )
+
+        if continue_flag:
+            df_matrix = df_step
+            step_elapsed = time.time() - step_start
+            print(f"    [Успех] Шаг {counter} успешно выполнен за {timedelta(seconds=int(step_elapsed))}")
+            break
+        # При 'retry' цикл начнется сначала, позволяя указать Status заново
+
+
+    #=============== ШАГ 4: ОПРЕДЕЛЕНИЕ НАЗВАНИЙ МОДЕЛЕЙ ПО КОДАМ (BOM Product Code -> BOM Product Name) ===============
+    counter += 1
+    step_start = time.time()
+    step_name = f"ШАГ {counter}: [{bp_number}] ОПРЕДЕЛЕНИЕ НАЗВАНИЙ МОДЕЛЕЙ ПО КОДАМ"
+    print_step_header(counter, bp_total_steps, step_name)
+
+    while True:
+        df_step = df_matrix.copy()
+
+        # Собираем уникальные BOM Product Code из матрицы
+        unique_bom_codes = sorted(get_unique_non_empty_values(df_step['BOM Product Code'], 'BOM Product Code'))
+
+        # Строим словарь соответствий {BOM Product Code: BOM Product Name}
+        code_to_name: Dict[str, str] = {}
+        not_found_codes: set = set()
+
+        for bom_code in unique_bom_codes:
+            # Префикс — первые 3 символа (например, 'A01G-R-BOM' → 'A01')
+            prefix = bom_code[:3]
+
+            model_name = BOM_PRODUCT_MAP.get(prefix)
+            if model_name:
+                code_to_name[bom_code] = model_name
             else:
-                print("  Колонка 'Change Description': все значения равны '-' или пустые. Перевод не требуется.")
-                df_bp_new['Change Description (RUS)'] = '-'
-                df_bp_new = df_bp_new.drop(['Change Description'], axis=1)
-            show_dataframe_preview(
-                df_bp_new, "Перевод описания (после)",
-                focus_columns=['BP_No', 'Status', 'BOM Product', 'Update Type', 'Part No.', 'Part Name (RUS)', 'Change Description (RUS)']
+                code_to_name[bom_code] = '-'
+                not_found_codes.add(bom_code)
+
+        # Применяем словарь через .map() — быстро и без дублирования lookup'ов
+        df_step['BOM Product Name'] = (
+            df_step['BOM Product Code']
+            .astype(str).str.strip()
+            .map(code_to_name)
+            .fillna('-')
+        )
+
+        # Единый дедуплицированный отчёт по ненайденным моделям
+        if not_found_codes:
+            print("\n  [Внимание] Не удалось определить модель для следующих BOM Product Code:")
+            for code in sorted(not_found_codes):
+                print(f"    - {code}")
+
+        # Сводка
+        found_count = sum(1 for name in df_step['BOM Product Name'] if name != '-')
+        print(f"\n  Всего строк: {len(df_step)} | Определено моделей: {found_count} | Не найдено: {len(df_step) - found_count}")
+
+        # Обязательный визуальный контроль результатов
+        show_dataframe_preview(
+            df_step,
+            step_name=step_name,
+            focus_columns=STEP_FOCUS_COLUMNS_MAP[counter - 1]
+        )
+
+        saved_state = save_state(df_step)
+
+        continue_flag, df_step, saved_state = confirm_step(
+            step_name=step_name,
+            df_current=df_step,
+            saved_state=saved_state
+        )
+
+        if continue_flag:
+            df_matrix = df_step
+            step_elapsed = time.time() - step_start
+            print(f"    [Успех] Шаг {counter} успешно выполнен за {timedelta(seconds=int(step_elapsed))}")
+            break
+        # При 'retry' цикл запустится заново, позволяя повторить определение моделей
+
+
+    #=============== ШАГ 5: ВВОД ФАКТИЧЕСКОЙ ПАРТИИ (Batch Fact) ===============
+    counter += 1
+    step_start = time.time()
+    step_name = f"ШАГ {counter}: [{bp_number}] ВВОД ФАКТИЧЕСКОЙ ПАРТИИ"
+    print_step_header(counter, bp_total_steps, step_name)
+
+    while True:
+        df_step = df_matrix.copy()
+        batch_fact_val = get_batch_fact(bp_number)
+        df_step['Batch Fact'] = batch_fact_val
+
+        show_dataframe_preview(
+            df_step,
+            step_name=step_name,
+            focus_columns=STEP_FOCUS_COLUMNS_MAP[counter - 1]
+        )
+
+        saved_state = save_state(df_step)
+
+        continue_flag, df_step, saved_state = confirm_step(
+            step_name=step_name,
+            df_current=df_step,
+            saved_state=saved_state
+        )
+
+        if continue_flag:
+            df_matrix = df_step
+            step_elapsed = time.time() - step_start
+            print(f"    [Успех] Шаг {counter} зафиксирован за {timedelta(seconds=int(step_elapsed))}")
+            break
+        # При 'retry' цикл начнется сначала, позволяя скорректировать Batch fact
+
+
+    #=============== ШАГ 6: ВВОД ФАКТИЧЕСКОЙ ДАТЫ (Change Date) ===============
+    counter += 1
+    step_start = time.time()
+    step_name = f"ШАГ {counter}: [{bp_number}] ВВОД ФАКТИЧЕСКОЙ ДАТЫ"
+    print_step_header(counter, bp_total_steps, step_name)
+
+    while True:
+        df_step = df_matrix.copy()
+        change_date_val: Optional[str] = get_change_date(bp_number)
+        df_step['Change Date'] = change_date_val if change_date_val else '-'
+
+        show_dataframe_preview(
+            df_step,
+            step_name=step_name,
+            focus_columns=STEP_FOCUS_COLUMNS_MAP[counter - 1]
+        )
+
+        saved_state = save_state(df_step)
+
+        continue_flag, df_step, saved_state = confirm_step(
+            step_name=step_name,
+            df_current=df_step,
+            saved_state=saved_state
+        )
+
+        if continue_flag:
+            df_matrix = df_step
+            step_elapsed = time.time() - step_start
+            print(f"    [Успех] Шаг {counter} успешно выполнен за {timedelta(seconds=int(step_elapsed))}")
+            break
+        # При 'retry' цикл начнется заново, позволяя скорректировать Change Date
+
+
+    #=============== ШАГ 7: ВВОД КОЛИЧЕСТВА BEFORE-ДЕТАЛЕЙ В SAFETY STOCK (Quantity Parts in SS) ===============
+    counter += 1
+    step_start = time.time()
+    step_name = f"ШАГ {counter}: [{bp_number}] ВВОД КОЛИЧЕСТВА BEFORE-ДЕТАЛЕЙ В SAFETY STOCK"
+    print_step_header(counter, bp_total_steps, step_name)
+
+    while True:
+        df_step = df_matrix.copy()
+        quantity_ss_map: Dict[str, float] = get_quantity_in_ss(df_step, bp_number)
+        df_step['Quantity Parts in SS'] = df_step['Part No. Before'].map(quantity_ss_map).fillna(0).astype(int)
+
+        show_dataframe_preview(
+            df_step,
+            step_name=step_name,
+            focus_columns=STEP_FOCUS_COLUMNS_MAP[counter - 1]
+        )
+
+        saved_state = save_state(df_step)
+
+        continue_flag, df_step, saved_state = confirm_step(
+            step_name=step_name,
+            df_current=df_step,
+            saved_state=saved_state
+        )
+
+        if continue_flag:
+            df_matrix = df_step
+            step_elapsed = time.time() - step_start
+            print(f"    [Успех] Шаг {counter} успешно выполнен за {timedelta(seconds=int(step_elapsed))}")
+            break
+        # При 'retry' цикл запустится заново, позволяя переписать объемы Safety Stock с нуля
+
+
+    #=============== ШАГ 8: ПЕРЕВОД НАЗВАНИЙ ДЕТАЛЕЙ (Part Name Before / After) ===============
+    counter += 1
+    step_start = time.time()
+    step_name = f"ШАГ {counter}: [{bp_number}] ПЕРЕВОД НАЗВАНИЙ ДЕТАЛЕЙ"
+    print_step_header(counter, bp_total_steps, step_name)
+
+    while True:
+        df_step = df_matrix.copy()
+        parts_translation_map = get_translation(
+            series_list=[
+                df_step['Part Name Before'],
+                df_step['Part Name After']
+            ],
+            field_name="названий деталей (Part Name Before/After)"
+        )
+
+        if parts_translation_map:
+            df_step['Part Name Before'] = df_step['Part Name Before'].map(parts_translation_map).fillna(df_step['Part Name Before'])
+            df_step['Part Name After'] = df_step['Part Name After'].map(parts_translation_map).fillna(df_step['Part Name After'])
+
+        show_dataframe_preview(
+            df_step,
+            step_name=step_name,
+            focus_columns=STEP_FOCUS_COLUMNS_MAP[counter - 1]
+        )
+
+        saved_state = save_state(df_step)
+
+        continue_flag, df_step, saved_state = confirm_step(
+            step_name=step_name,
+            df_current=df_step,
+            saved_state=saved_state
+        )
+
+        if continue_flag:
+            df_matrix = df_step
+            step_elapsed = time.time() - step_start
+            print(f"    [Успех] Шаг {counter} успешно выполнен за {timedelta(seconds=int(step_elapsed))}")
+            break
+        # При 'retry' цикл запустится заново, позволяя скорректировать переводы деталей
+
+
+    #=============== ШАГ 9: ПЕРЕВОД ОФИЦИАЛЬНЫХ НАЗВАНИЙ ПОСТАВЩИКОВ (Supplier Name Before / After) ===============
+    counter += 1
+    step_start = time.time()
+    step_name = f"ШАГ {counter}: [{bp_number}] ПЕРЕВОД ОФИЦИАЛЬНЫХ НАЗВАНИЙ ПОСТАВЩИКОВ"
+    print_step_header(counter, bp_total_steps, step_name)
+
+    while True:
+        df_step = df_matrix.copy()
+
+        # Передаём обе ветки матрицы — функция сама соберёт уникальные значения поставщиков
+        suppliers_translation_map = get_translation(
+            series_list=[
+                df_step['Supplier Name Before'],
+                df_step['Supplier Name After']
+            ],
+            field_name="названий поставщиков (Supplier Name Before/After)"
+        )
+
+        # Применяем полученную карту переводов одновременно к обеим колонкам матрицы.
+        # Если перевода нет, сохраняем исходное название во избежание порчи данных.
+        if suppliers_translation_map:
+            df_step['Supplier Name Before'] = df_step['Supplier Name Before'].map(suppliers_translation_map).fillna(df_step['Supplier Name Before'])
+            df_step['Supplier Name After'] = df_step['Supplier Name After'].map(suppliers_translation_map).fillna(df_step['Supplier Name After'])
+
+        # Выводим сопоставление номеров деталей и их отрефакторенных поставщиков
+        show_dataframe_preview(
+            df_step,
+            step_name=step_name,
+            focus_columns=STEP_FOCUS_COLUMNS_MAP[counter - 1]
+        )
+
+        # Фиксируем слепок оперативной памяти перед верификацией
+        saved_state = save_state(df_step)
+
+        # Интерактивный запрос на фиксацию изменений или сброс (retry)
+        continue_flag, df_step, saved_state = confirm_step(
+            step_name=step_name,
+            df_current=df_step,
+            saved_state=saved_state
+        )
+
+        if continue_flag:
+            # Шаг успешно пройден, фиксируем состояние матрицы и выходим из цикла
+            df_matrix = df_step
+            step_elapsed = time.time() - step_start
+            print(f"    [Успех] Шаг {counter} успешно выполнен за {timedelta(seconds=int(step_elapsed))}")
+            break
+        # При 'retry' цикл запустится заново, позволяя скорректировать переводы поставщиков
+
+
+    #=============== ШАГ 10: ВВОД СТАТУСА ЛОКАЛИЗАЦИИ ПОСТАВЩИКОВ (Localization Before / After) ===============
+    counter += 1
+    step_start = time.time()
+    step_name = f"ШАГ {counter}: [{bp_number}] ВВОД СТАТУСА ЛОКАЛИЗАЦИИ ПОСТАВЩИКОВ"
+    print_step_header(counter, bp_total_steps, step_name)
+
+    while True:
+        df_step = df_matrix.copy()
+
+        localization_map = get_supplier_localization_status(
+            series_list=[
+                df_step['Supplier Name Before'],
+                df_step['Supplier Name After']
+            ],
+            bp_number=bp_number
+        )
+
+        # Синхронно мапим результаты на обе ветки матрицы
+        df_step['Localization Before'] = df_step['Supplier Name Before'].map(localization_map).fillna('-')
+        df_step['Localization After'] = df_step['Supplier Name After'].map(localization_map).fillna('-')
+
+        show_dataframe_preview(
+            df_step,
+            step_name=step_name,
+            focus_columns=STEP_FOCUS_COLUMNS_MAP[counter - 1]
+        )
+
+        saved_state = save_state(df_step)
+
+        continue_flag, df_step, saved_state = confirm_step(
+            step_name=step_name,
+            df_current=df_step,
+            saved_state=saved_state
+        )
+
+        if continue_flag:
+            df_matrix = df_step
+            step_elapsed = time.time() - step_start
+            print(f"    [Успех] Шаг {counter} успешно выполнен за {timedelta(seconds=int(step_elapsed))}")
+            break
+        # При 'retry' цикл запустится заново, позволяя переписать статусы локализации с нуля
+
+
+    #=============== ШАГ 11: ВВОД ДАННЫХ О МЕСТОПОЛОЖЕНИИ BEFORE-ПОСТАВЩИКОВ ===============
+    counter += 1
+    step_start = time.time()
+    step_name = f"ШАГ {counter}: [{bp_number}] ВВОД ДАННЫХ О МЕСТОПОЛОЖЕНИИ BEFORE-ПОСТАВЩИКОВ"
+    print_step_header(counter, bp_total_steps, step_name)
+
+    while True:
+        df_step = df_matrix.copy()
+
+        location_maps = get_supplier_location_data(
+            series_list=[df_step['Supplier Name Before']],
+            bp_number=bp_number,
+            branch='Before'
+        )
+
+        # Нормализуем колонку поставщика один раз — убираем NaN/None из ключей
+        supplier_keys = (
+            df_step['Supplier Name Before']
+            .astype(str)
+            .str.strip()
+        )
+
+        # Мапим 4 плоские мапы на 4 целевые колонки Before-ветки
+        df_step['Supplier Location Before'] = (
+            supplier_keys.map(location_maps.get('location', {})).fillna('-')
+        )
+        df_step['Supplier City Before'] = (
+            supplier_keys.map(location_maps.get('city', {})).fillna('-')
+        )
+        df_step['Supplier Street Before'] = (
+            supplier_keys.map(location_maps.get('street', {})).fillna('-')
+        )
+        df_step['Supplier Building Before'] = (
+            supplier_keys.map(location_maps.get('building', {})).fillna('-')
+        )
+
+        show_dataframe_preview(
+            df_step,
+            step_name=step_name,
+            focus_columns=STEP_FOCUS_COLUMNS_MAP[counter - 1]
+        )
+
+        saved_state = save_state(df_step)
+
+        continue_flag, df_step, saved_state = confirm_step(
+            step_name=step_name,
+            df_current=df_step,
+            saved_state=saved_state
+        )
+
+        if continue_flag:
+            df_matrix = df_step
+            step_elapsed = time.time() - step_start
+            print(f"    [Успех] Шаг {counter} успешно выполнен за {timedelta(seconds=int(step_elapsed))}")
+            break
+        # При 'retry' цикл запустится заново, позволяя переписать местоположение с нуля
+
+
+    #=============== ШАГ 12: ВВОД ДАННЫХ О МЕСТОПОЛОЖЕНИИ AFTER-ПОСТАВЩИКОВ ===============
+    counter += 1
+    step_start = time.time()
+    step_name = f"ШАГ {counter}: [{bp_number}] ВВОД ДАННЫХ О МЕСТОПОЛОЖЕНИИ AFTER-ПОСТАВЩИКОВ"
+    print_step_header(counter, bp_total_steps, step_name)
+
+    while True:
+        df_step = df_matrix.copy()
+
+        location_maps = get_supplier_location_data(
+            series_list=[df_step['Supplier Name After']],
+            bp_number=bp_number,
+            branch='After'
+        )
+
+        # Нормализуем колонку поставщика один раз — убираем NaN/None из ключей
+        supplier_keys = (
+            df_step['Supplier Name After']
+            .astype(str)
+            .str.strip()
+        )
+
+        # Мапим 4 плоские мапы на 4 целевые колонки After-ветки
+        df_step['Supplier Location After'] = (
+            supplier_keys.map(location_maps.get('location', {})).fillna('-')
+        )
+        df_step['Supplier City After'] = (
+            supplier_keys.map(location_maps.get('city', {})).fillna('-')
+        )
+        df_step['Supplier Street After'] = (
+            supplier_keys.map(location_maps.get('street', {})).fillna('-')
+        )
+        df_step['Supplier Building After'] = (
+            supplier_keys.map(location_maps.get('building', {})).fillna('-')
+        )
+
+        show_dataframe_preview(
+            df_step,
+            step_name=step_name,
+            focus_columns=STEP_FOCUS_COLUMNS_MAP[counter - 1]
+        )
+
+        saved_state = save_state(df_step)
+
+        continue_flag, df_step, saved_state = confirm_step(
+            step_name=step_name,
+            df_current=df_step,
+            saved_state=saved_state
+        )
+
+        if continue_flag:
+            df_matrix = df_step
+            step_elapsed = time.time() - step_start
+            print(f"    [Успех] Шаг {counter} успешно выполнен за {timedelta(seconds=int(step_elapsed))}")
+            break
+        # При 'retry' цикл запустится заново, позволяя переписать местоположение с нуля
+
+
+    #=============== ШАГ 13: ПЕРЕВОД ОПИСАНИЯ К ИЗМЕНЕНИЮ (Change Description) ===============
+    counter += 1
+    step_start = time.time()
+    step_name = f"ШАГ {counter}: [{bp_number}] ПЕРЕВОД ОПИСАНИЯ К ИЗМЕНЕНИЮ"
+    print_step_header(counter, bp_total_steps, step_name)
+
+    while True:
+        df_step = df_matrix.copy()
+
+        # 1. Фильтрация: оставляем только китайский оригинал (источник истины)
+        if 'Change Description' in df_step.columns:
+            df_step['Change Description'] = df_step['Change Description'].apply(keep_chinese_lines)
+
+            # 2. Интерактивный перевод очищенных значений
+            desc_translation_map = get_translation(
+                series_list=[df_step['Change Description']],
+                field_name="описаний технического изменения (Change Description)"
             )
 
-        continue_flag, df_bp_new, saved_state = confirm_step("Перевод описания изменений", df_bp_new, saved_state)
-        if continue_flag:
-            step_elapsed = time.time() - step_start
-            print(f"  [Время шага 9: {timedelta(seconds=int(step_elapsed))}]")
-            break
-        # retry - повторяем шаг 9
-
-    # Шаг 10: Перевод решения
-    while True:
-        step_start = time.time()
-        print_step_header(10, 17, "Перевод решения к изменению")
-        if 'Solution' in df_bp_new.columns:
-            unique_sols = get_unique_non_empty_values(df_bp_new['Solution'], 'Solution')
-
-            if len(unique_sols) > 0:
-                sol_translations = interactive_translation(unique_sols, "решений")
-                df_bp_new['Solution (RUS)'] = df_bp_new['Solution'].map(sol_translations).fillna('-')
-                df_bp_new = df_bp_new.drop(['Solution'], axis=1)
+            # 3. Переносим перевод в целевую колонку и удаляем исходную
+            if desc_translation_map:
+                df_step['Change Description (RUS)'] = df_step['Change Description'].map(desc_translation_map).fillna('-')
             else:
-                print("  Колонка 'Solution': все значения равны '-' или пустые. Перевод не требуется.")
-                df_bp_new['Solution (RUS)'] = '-'
-                df_bp_new = df_bp_new.drop(['Solution'], axis=1)
-            show_dataframe_preview(
-                df_bp_new, "Перевод решения (после)",
-                focus_columns=['BP_No', 'Status', 'BOM Product', 'Update Type', 'Part No.', 'Part Name (RUS)', 'Solution (RUS)']
-            )
+                df_step['Change Description (RUS)'] = '-'
 
-        continue_flag, df_bp_new, saved_state = confirm_step("Перевод решения", df_bp_new, saved_state)
-        if continue_flag:
-            step_elapsed = time.time() - step_start
-            print(f"  [Время шага 10: {timedelta(seconds=int(step_elapsed))}]")
-            break
-        # retry - повторяем шаг 10
-
-    # Шаг 11: Обработка цветов и Color Code
-    while True:
-        step_start = time.time()
-        print_step_header(11, 17, "Обработка цветов и Color Code")
-
-        if 'Color Name' in df_bp_new.columns:
-            unique_colors = get_unique_non_empty_values(df_bp_new['Color Name'], 'Color Name')
-
-            if len(unique_colors) > 0:
-                print("  Выполняется перевод цветов...")
-                color_translations = interactive_translation(unique_colors, "цветов")
-                df_bp_new['Color Name (RUS)'] = df_bp_new['Color Name'].map(color_translations).fillna('-')
-                df_bp_new = df_bp_new.drop(['Color Name'], axis=1)
-            else:
-                print("  Колонка 'Color Name': все значения равны '-' или пустые. Перевод не требуется.")
-                df_bp_new['Color Name (RUS)'] = '-'
-                df_bp_new = df_bp_new.drop(['Color Name'], axis=1)
+            df_step = df_step.drop(['Change Description'], axis=1)
         else:
-            print("  Колонка 'Color Name' отсутствует. Создаём колонку 'Color Name (RUS)' со значениями '-'.")
-            df_bp_new['Color Name (RUS)'] = '-'
+            print("  [Информация] Колонка 'Change Description' отсутствует в матрице. Шаг пропущен.")
+            df_step['Change Description (RUS)'] = '-'
 
-        if 'Color Code' in df_bp_new.columns:
-            unique_codes = get_unique_non_empty_values(df_bp_new['Color Code'], 'Color Code')
+        # Обязательный визуальный контроль результатов
+        show_dataframe_preview(
+            df_step,
+            step_name=step_name,
+            focus_columns=STEP_FOCUS_COLUMNS_MAP[counter - 1]
+        )
+
+        saved_state = save_state(df_step)
+
+        continue_flag, df_step, saved_state = confirm_step(
+            step_name=step_name,
+            df_current=df_step,
+            saved_state=saved_state
+        )
+
+        if continue_flag:
+            df_matrix = df_step
+            step_elapsed = time.time() - step_start
+            print(f"    [Успех] Шаг {counter} успешно выполнен за {timedelta(seconds=int(step_elapsed))}")
+            break
+        # При 'retry' цикл запустится заново, позволяя скорректировать перевод описания
+
+    #=============== ШАГ 14: ПЕРЕВОД РЕШЕНИЯ К ИЗМЕНЕНИЮ (Change Solution) ===============
+    counter += 1
+    step_start = time.time()
+    step_name = f"ШАГ {counter}: [{bp_number}] ПЕРЕВОД РЕШЕНИЯ К ИЗМЕНЕНИЮ"
+    print_step_header(counter, bp_total_steps, step_name)
+
+    while True:
+        df_step = df_matrix.copy()
+
+        # 1. Фильтрация: оставляем только китайский оригинал (источник истины)
+        if 'Solution' in df_step.columns:
+            df_step['Solution'] = df_step['Solution'].apply(keep_chinese_lines)
+
+            # 2. Интерактивный перевод очищенных значений
+            solution_translation_map = get_translation(
+                series_list=[df_step['Solution']],
+                field_name="решений технического изменения (Solution)"
+            )
+
+            # 3. Переносим перевод в целевую колонку 'Change Solution (RUS)' и удаляем исходную
+            if solution_translation_map:
+                df_step['Change Solution (RUS)'] = df_step['Solution'].map(solution_translation_map).fillna('-')
+            else:
+                df_step['Change Solution (RUS)'] = '-'
+
+            df_step = df_step.drop(['Solution'], axis=1)
+        else:
+            print("  [Информация] Колонка 'Solution' отсутствует в матрице. Шаг пропущен.")
+            df_step['Change Solution (RUS)'] = '-'
+
+        # Обязательный визуальный контроль результатов
+        show_dataframe_preview(
+            df_step,
+            step_name=step_name,
+            focus_columns=STEP_FOCUS_COLUMNS_MAP[counter - 1]
+        )
+
+        saved_state = save_state(df_step)
+
+        continue_flag, df_step, saved_state = confirm_step(
+            step_name=step_name,
+            df_current=df_step,
+            saved_state=saved_state
+        )
+
+        if continue_flag:
+            df_matrix = df_step
+            step_elapsed = time.time() - step_start
+            print(f"    [Успех] Шаг {counter} успешно выполнен за {timedelta(seconds=int(step_elapsed))}")
+            break
+        # При 'retry' цикл запустится заново, позволяя скорректировать перевод решения
+
+
+    #=============== ШАГ 15: ПЕРЕВОД ЦВЕТА (Color Code и Color Name) ===============
+    counter += 1
+    step_start = time.time()
+    step_name = f"ШАГ {counter}: [{bp_number}] ПЕРЕВОД ЦВЕТА"
+    print_step_header(counter, bp_total_steps, step_name)
+
+    while True:
+        df_step = df_matrix.copy()
+
+        # 1. Перевод названия цвета (Color Name → Color Name (RUS))
+        if 'Color Name' in df_step.columns:
+            color_translation_map = get_translation(
+                series_list=[df_step['Color Name']],
+                field_name="названий цвета (Color Name)"
+            )
+
+            if color_translation_map:
+                df_step['Color Name (RUS)'] = df_step['Color Name'].map(color_translation_map).fillna('-')
+            else:
+                df_step['Color Name (RUS)'] = '-'
+
+            df_step = df_step.drop(['Color Name'], axis=1)
+        else:
+            print("  [Информация] Колонка 'Color Name' отсутствует в матрице. Создаём 'Color Name (RUS)' со значениями '-'.")
+            df_step['Color Name (RUS)'] = '-'
+
+        # 2. Валидация колонки Color Code (не переводится, только проверка наличия)
+        if 'Color Code' in df_step.columns:
+            unique_codes = get_unique_non_empty_values(df_step['Color Code'], 'Color Code')
 
             if len(unique_codes) > 0:
-                print("  Колонка 'Color Code' содержит данные. Исходные значения сохранены без изменений.")
+                print(f"  [Color Code] Колонка содержит данные ({len(unique_codes)} уникальных кодов). Перевод не требуется.")
             else:
-                print("  Колонка 'Color Code' не содержит данных или все значения равны '-'. Заполняем '-'.")
-                df_bp_new['Color Code'] = '-'
+                print("  [Color Code] Колонка не содержит данных или все значения равны '-'. Заполняем '-'.")
+                df_step['Color Code'] = '-'
         else:
-            print("  Колонка 'Color Code' отсутствует. Создаём колонку 'Color Code' со значениями '-'.")
-            df_bp_new['Color Code'] = '-'
+            print("  [Color Code] Колонка отсутствует в матрице. Создаём 'Color Code' со значениями '-'.")
+            df_step['Color Code'] = '-'
 
+        # Обязательный визуальный контроль результатов
         show_dataframe_preview(
-            df_bp_new, "Обработка цветов",
-            focus_columns=['BP_No', 'Status', 'BOM Product', 'Update Type', 'Part No.', 'Part Name (RUS)', 'Color Code', 'Color Name (RUS)']
+            df_step,
+            step_name=step_name,
+            focus_columns=STEP_FOCUS_COLUMNS_MAP[counter - 1]
         )
 
-        continue_flag, df_bp_new, saved_state = confirm_step("Обработка цветов и Color Code", df_bp_new, saved_state)
+        saved_state = save_state(df_step)
+
+        continue_flag, df_step, saved_state = confirm_step(
+            step_name=step_name,
+            df_current=df_step,
+            saved_state=saved_state
+        )
+
         if continue_flag:
+            df_matrix = df_step
             step_elapsed = time.time() - step_start
-            print(f"  [Время шага 11: {timedelta(seconds=int(step_elapsed))}]")
+            print(f"    [Успех] Шаг {counter} успешно выполнен за {timedelta(seconds=int(step_elapsed))}")
             break
-        # retry - повторяем шаг 11
+        # При 'retry' цикл запустится заново, позволяя скорректировать перевод цвета
 
-    # Шаг 12: Обработка рабочих центров
+
+    #=============== ШАГ 16: ОБРАБОТКА ЦЕХОВ И РАБОЧИХ СТАНЦИЙ (Workshop/Workcenter Code/Name Before/After) ===============
+    counter += 1
+    step_start = time.time()
+    step_name = f"ШАГ {counter}: [{bp_number}] ОБРАБОТКА ЦЕХОВ И РАБОЧИХ СТАНЦИЙ"
+    print_step_header(counter, bp_total_steps, step_name)
+
     while True:
-        step_start = time.time()
-        print_step_header(12, 17, "Обработка рабочих центров")
-        if 'Workcenter Name' in df_bp_new.columns:
-            df_bp_new['Workcenter Name'] = df_bp_new['Workcenter Name'].apply(extract_parentheses_content)
+        df_step = df_matrix.copy()
 
-            unique_wc = get_unique_non_empty_values(df_bp_new['Workcenter Name'], 'Workcenter Name')
+        # Локальный set для дедупликации предупреждений о нераспознанных кодах
+        unrecognized_codes: set = set()
 
-            if len(unique_wc) > 0:
-                wc_translations = interactive_translation(unique_wc, "рабочих центров")
-                df_bp_new['Workcenter Name'] = df_bp_new['Workcenter Name'].map(wc_translations).fillna('-')
+        # Для обеих веток (Before / After) выполняем единый алгоритм:
+        #   1. Извлекаем название воркцентра из скобок (если есть).
+        #   2. По коду воркцентра определяем код и название цеха.
+        for branch in ('Before', 'After'):
+            col_wc_code = f'Workcenter Code {branch}'
+            col_wc_name = f'Workcenter Name {branch}'
+
+            # --- 1. Обработка названия воркцентра: извлекаем содержимое скобок ---
+            if col_wc_name in df_step.columns:
+                df_step[col_wc_name] = df_step[col_wc_name].apply(extract_parentheses_content)
             else:
-                print("  Все значения рабочих центров равны '-' или пустые. Перевод не требуется.")
-            show_dataframe_preview(
-                df_bp_new, "Обработка рабочих центров",
-                focus_columns=['BP_No', 'Status', 'BOM Product', 'Update Type', 'Part No.', 'Part Name (RUS)', 'Workcenter Name']
+                print(f"  [Информация] Колонка '{col_wc_name}' отсутствует в матрице. Создаём со значениями '-'.")
+                df_step[col_wc_name] = '-'
+
+            # --- 2. Определение цеха по коду воркцентра ---
+            if col_wc_code in df_step.columns:
+                workshop_codes: List[str] = []
+                workshop_names: List[str] = []
+                for code in df_step[col_wc_code]:
+                    result = detect_workshop_by_code(code)
+
+                    # Собираем нераспознанные валидные коды для единого отчёта
+                    if result['workshop_code'] == '-' and isinstance(code, str) and code.strip() not in ('', '-'):
+                        unrecognized_codes.add(code)
+
+                    workshop_codes.append(result['workshop_code'])
+                    workshop_names.append(result['workshop_name'])
+
+                df_step[f'Workshop Code {branch}'] = workshop_codes
+                df_step[f'Workshop Name {branch}'] = workshop_names
+            else:
+                print(f"  [Информация] Колонка '{col_wc_code}' отсутствует в матрице. Цех не определён.")
+                df_step[f'Workshop Code {branch}'] = '-'
+                df_step[f'Workshop Name {branch}'] = '-'
+
+        # Единый дедуплицированный отчёт по нераспознанным кодам
+        if unrecognized_codes:
+            print("\n  [Внимание] Не удалось определить цех для следующих кодов воркцентров:")
+            for code in sorted(unrecognized_codes):
+                print(f"    - {code}")
+
+        # Обязательный визуальный контроль результатов
+        show_dataframe_preview(
+            df_step,
+            step_name=step_name,
+            focus_columns=STEP_FOCUS_COLUMNS_MAP[counter - 1]
+        )
+
+        saved_state = save_state(df_step)
+
+        continue_flag, df_step, saved_state = confirm_step(
+            step_name=step_name,
+            df_current=df_step,
+            saved_state=saved_state
+        )
+
+        if continue_flag:
+            df_matrix = df_step
+            step_elapsed = time.time() - step_start
+            print(f"    [Успех] Шаг {counter} успешно выполнен за {timedelta(seconds=int(step_elapsed))}")
+            break
+        # При 'retry' цикл запустится заново, позволяя скорректировать обработку цехов
+
+
+    #=============== ШАГ 17: ПЕРЕВОД ТРЕБОВАНИЙ ПО УТИЛИЗАЦИИ СТАРЫХ ДЕТАЛЕЙ (Production Part Disposal) ===============
+    counter += 1
+    step_start = time.time()
+    step_name = f"ШАГ {counter}: [{bp_number}] ПЕРЕВОД ТРЕБОВАНИЙ ПО УТИЛИЗАЦИИ СТАРЫХ ДЕТАЛЕЙ"
+    print_step_header(counter, bp_total_steps, step_name)
+
+    while True:
+        df_step = df_matrix.copy()
+
+        # Перевод требований по утилизации (замена на месте, без сохранения оригинала)
+        if 'Production Part Disposal' in df_step.columns:
+            disposal_translation_map = get_translation(
+                series_list=[df_step['Production Part Disposal']],
+                field_name="требований по утилизации старых деталей (Production Part Disposal)"
             )
 
-        continue_flag, df_bp_new, saved_state = confirm_step("Обработка рабочих центров", df_bp_new, saved_state)
-        if continue_flag:
-            step_elapsed = time.time() - step_start
-            print(f"  [Время шага 12: {timedelta(seconds=int(step_elapsed))}]")
-            break
-        # retry - повторяем шаг 12
-
-    # Шаг 13: Перевод требований по дальнешейму использованию или утилизации старых деталей
-    while True:
-        step_start = time.time()
-        print_step_header(13, 17, "Перевод требований по утилизации старых деталей")
-        df_bp_new = translate_production_part_disposal(df_bp_new, bp_number)
-        show_dataframe_preview(
-            df_bp_new, "Перевод требований по утилизации старых деталей",
-            focus_columns=['BP_No', 'Status', 'BOM Product', 'Update Type', 'Part No.', 'Part Name (RUS)', 'Production Part Disposal']
-        )
-
-        continue_flag, df_bp_new, saved_state = confirm_step(
-            "Перевод по утилизации старых деталей", df_bp_new, saved_state
-        )
-        if continue_flag:
-            step_elapsed = time.time() - step_start
-            print(f"  [Время шага 13: {timedelta(seconds=int(step_elapsed))}]")
-            break
-        # retry - повторяем шаг 13
-
-    # Шаг 14: Перевод требований по взаимозаменяемости
-    while True:
-        print_step_header(14, 17, "Перевод требований по взаимозаменяемости")
-        df_bp_new = translate_interchangeable(df_bp_new, bp_number)
-        show_dataframe_preview(
-            df_bp_new, "Перевод требований по взаимозаменяемости",
-            focus_columns=['BP_No', 'Status', 'BOM Product', 'Update Type', 'Part No.', 'Part Name (RUS)', 'Interchangeable']
-        )
-
-        continue_flag, df_bp_new, saved_state = confirm_step(
-            "Перевод требований по взаимозаменяемости", df_bp_new, saved_state
-        )
-        if continue_flag:
-            step_elapsed = time.time() - step_start
-            print(f"  [Время шага 14: {timedelta(seconds=int(step_elapsed))}]")
-            break
-        # retry - повторяем шаг 14
-
-    # Шаг 15: Проверка наличия в BOM
-    while True:
-        step_start = time.time()
-        print_step_header(15, 17, "Проверка наличия деталей в BOM")
-        if df_bom is not None and 'BOM Product' in df_bp_new.columns and 'Part No.' in df_bp_new.columns:
-            try:
-                df_bp_new['Composite Key'] = df_bp_new['BOM Product'].astype(str) + '|' + df_bp_new['Part No.'].astype(str)
-                df_bom['Composite Key'] = df_bom['Model'].astype(str) + '|' + df_bom['Part number'].astype(str)
-                df_bp_new['Is in BOM'] = df_bp_new['Composite Key'].isin(df_bom['Composite Key'])
-                df_bp_new = df_bp_new.drop(['Composite Key'], axis=1)
-
-                if df_bp_new['Is in BOM'].dtype == bool:
-                    in_bom_count = df_bp_new['Is in BOM'].sum()
-                    print(f"  Результат: {in_bom_count} из {len(df_bp_new)} деталей найдены в BOM")
-                else:
-                    print("  Результат: проверка выполнена")
-            except KeyError as e:
-                print(f"Ошибка: Отсутствует необходимая колонка в BOM файле: {e}")
-                df_bp_new['Is in BOM'] = 'Error'
+            if disposal_translation_map:
+                df_step['Production Part Disposal'] = df_step['Production Part Disposal'].map(disposal_translation_map).fillna('-')
+            else:
+                df_step['Production Part Disposal'] = '-'
         else:
-            df_bp_new['Is in BOM'] = 'Unknown'
-            print("  Проверка не выполнена: отсутствуют необходимые колонки или BOM файл")
+            print("  [Информация] Колонка 'Production Part Disposal' отсутствует в матрице. Создаём со значениями '-'.")
+            df_step['Production Part Disposal'] = '-'
 
+        # Обязательный визуальный контроль результатов
         show_dataframe_preview(
-            df_bp_new, "Проверка наличия в BOM",
-            focus_columns=['BP_No', 'Status', 'BOM Product', 'Update Type', 'Part No.', 'Part Name (RUS)', 'Is in BOM']
+            df_step,
+            step_name=step_name,
+            focus_columns=STEP_FOCUS_COLUMNS_MAP[counter - 1]
         )
 
-        continue_flag, df_bp_new, saved_state = confirm_step("Проверка наличия в BOM", df_bp_new, saved_state)
-        if continue_flag:
-            step_elapsed = time.time() - step_start
-            print(f"  [Время шага 15: {timedelta(seconds=int(step_elapsed))}]")
-            break
-        # retry - повторяем шаг 15
+        saved_state = save_state(df_step)
 
-    # Шаг 16: Упорядочивание колонок
-    while True:
-        step_start = time.time()
-        print_step_header(16, 17, "Упорядочивание колонок")
-        bp_columns_order = [
-            'BP_No', 'Status', 'In Stock', 'New Part Available Date', 'BOM Product',
-            'Change', 'Update Type', 'Is in BOM', 'Part No.', 'Part Name (RUS)', 'Quantity',
-            'Quantity in SS', 'Workcenter No.', 'Workcenter Name', 'Production Part Disposal',
-            'Interchangeable', 'Supplier Name (RUS)', 'Localization', 'Change Description (RUS)', 'Solution (RUS)',
-            'Color Code', 'Color Name (RUS)'
-        ]
-
-        existing_cols = [col for col in bp_columns_order if col in df_bp_new.columns]
-        missing_cols_in_order = set(bp_columns_order) - set(existing_cols)
-
-        print(f"  Выбрано колонок для финального вывода: {len(existing_cols)} из {len(bp_columns_order)}")
-        if missing_cols_in_order:
-            print(f"  Отсутствуют в данных: {missing_cols_in_order}")
-
-        df_bp_new = df_bp_new[existing_cols]
-        show_dataframe_preview(
-            df_bp_new, "Упорядочивание колонок (финальный результат)",
-            focus_columns=['BP_No', 'Status', 'In Stock', 'New Part Available Date', 'BOM Product', 'Change', 'Update Type', 'Is in BOM', 'Part No.']
+        continue_flag, df_step, saved_state = confirm_step(
+            step_name=step_name,
+            df_current=df_step,
+            saved_state=saved_state
         )
 
-        continue_flag, df_bp_new, saved_state = confirm_step("Упорядочивание колонок", df_bp_new, saved_state)
         if continue_flag:
+            df_matrix = df_step
             step_elapsed = time.time() - step_start
-            print(f"  [Время шага 16: {timedelta(seconds=int(step_elapsed))}]")
+            print(f"    [Успех] Шаг {counter} успешно выполнен за {timedelta(seconds=int(step_elapsed))}")
             break
-        # retry - повторяем шаг 16
+        # При 'retry' цикл запустится заново, позволяя скорректировать перевод
 
-    # Шаг 17: Сохранение результата
+
+    #=============== ШАГ 18: ПЕРЕВОД ТРЕБОВАНИЙ ПО ВЗАИМОЗАМЕНЯЕМОСТИ (Interchangeable) ===============
+    counter += 1
     step_start = time.time()
-    print_step_header(17, 17, "Сохранение результата")
+    step_name = f"ШАГ {counter}: [{bp_number}] ПЕРЕВОД ТРЕБОВАНИЙ ПО ВЗАИМОЗАМЕНЯЕМОСТИ"
+    print_step_header(counter, bp_total_steps, step_name)
 
-    bp_dataframe = {
+    while True:
+        df_step = df_matrix.copy()
+
+        # Перевод требований по взаимозаменяемости (замена на месте, без сохранения оригинала)
+        if 'Interchangeable' in df_step.columns:
+            interchangeable_translation_map = get_translation(
+                series_list=[df_step['Interchangeable']],
+                field_name="требований по взаимозаменяемости (Interchangeable)"
+            )
+
+            if interchangeable_translation_map:
+                df_step['Interchangeable'] = df_step['Interchangeable'].map(interchangeable_translation_map).fillna('-')
+            else:
+                df_step['Interchangeable'] = '-'
+        else:
+            print("  [Информация] Колонка 'Interchangeable' отсутствует в матрице. Создаём со значениями '-'.")
+            df_step['Interchangeable'] = '-'
+
+        # Обязательный визуальный контроль результатов
+        show_dataframe_preview(
+            df_step,
+            step_name=step_name,
+            focus_columns=STEP_FOCUS_COLUMNS_MAP[counter - 1]
+        )
+
+        saved_state = save_state(df_step)
+
+        continue_flag, df_step, saved_state = confirm_step(
+            step_name=step_name,
+            df_current=df_step,
+            saved_state=saved_state
+        )
+
+        if continue_flag:
+            df_matrix = df_step
+            step_elapsed = time.time() - step_start
+            print(f"    [Успех] Шаг {counter} успешно выполнен за {timedelta(seconds=int(step_elapsed))}")
+            break
+        # При 'retry' цикл запустится заново, позволяя скорректировать перевод
+
+
+    #=============== ШАГ 19: ЗАГРУЗКА КОНФИГУРАЦИОННОГО ФАЙЛА (YYYY-mm-dd_configuration.xlsx) ===============
+    counter += 1
+    step_start = time.time()
+    step_name = f"ШАГ {counter}: [{bp_number}] ЗАГРУЗКА КОНФИГУРАЦИОННОГО ФАЙЛА"
+    print_step_header(counter, bp_total_steps, step_name)
+
+    while True:
+        df_config = load_configuration_file()
+
+        if df_config is None or df_config.empty:
+            print(f"  [Внимание] Конфигурационный файл недоступен. Шаги {counter + 1} и {counter + 2} будут пропущены.")
+            df_config = pd.DataFrame()
+
+        # Показываем оператору превью загруженной конфигурации
+        show_dataframe_preview(
+            df_config,
+            step_name=step_name,
+            focus_columns=STEP_FOCUS_COLUMNS_MAP[counter - 1]
+        )
+
+        continue_flag, _, _ = confirm_step(
+            step_name=step_name,
+            df_current=df_config,
+            saved_state=df_config
+        )
+
+        if continue_flag:
+            step_elapsed = time.time() - step_start
+            print(f"    [Успех] Шаг {counter} успешно выполнен за {timedelta(seconds=int(step_elapsed))}")
+            break
+        else:
+            # При retry — сбрасываем кэш, чтобы перечитать файл заново
+            print("  [Сброс кэша конфигурации] Файл будет перечитан при следующем входе в шаг.")
+            load_configuration_file.cache_clear()
+            continue
+
+
+    #=============== ШАГ 20: РАСЧЁТ ПАРТИЙ В SAFETY STOCK (Quantity Batches in SS) ===============
+    counter += 1
+    step_start = time.time()
+    step_name = f"ШАГ {counter}: [{bp_number}] РАСЧЁТ ПАРТИЙ В SAFETY STOCK"
+    print_step_header(counter, bp_total_steps, step_name)
+
+    while True:
+        df_step = df_matrix.copy()
+
+        # Загружаем конфигурацию (из кэша, мгновенно)
+        df_config = load_configuration_file()
+
+        if df_config is None or df_config.empty:
+            print("  [Пропуск] Конфигурация недоступна. Quantity Batches in SS = нет данных.")
+            df_step['Quantity Batches in SS'] = np.nan
+        else:
+            # Строим словарь {BOM Product: Quantity Vehicle in Batch} один раз
+            qty_map: Dict[str, float] = {}
+            for _, row in df_config.iterrows():
+                bom = str(row.get('BOM Product', '')).strip()
+                if not bom or bom == '-':
+                    continue
+                try:
+                    qty_map[bom] = float(row.get('Quantity Vehicle in Batch', 0))
+                except (ValueError, TypeError):
+                    qty_map[bom] = 0.0
+
+            # Собираем BOM Product, для которых не нашлось значение
+            not_found_products = {
+                bom for bom in df_step['BOM Product'].astype(str).str.strip()
+                if bom and bom != '-' and bom not in qty_map
+            }
+
+            if not_found_products:
+                print("\n  [Внимание] Не найдено Quantity Vehicle in Batch для следующих BOM Product:")
+                for product in sorted(not_found_products):
+                    print(f"    - {product}")
+
+            # Векторизованный расчёт Quantity Batches in SS
+            qty_vehicle_series = (
+                df_step['BOM Product'].astype(str).str.strip()
+                .map(qty_map)
+            )
+            qty_in_ss_series = pd.to_numeric(df_step['Quantity Parts in SS'], errors='coerce')
+
+            # Инициализируем колонку NaN
+            df_step['Quantity Batches in SS'] = np.nan
+
+            # Считаем только там, где qty_vehicle > 0 и qty_in_ss есть
+            mask = (
+                qty_vehicle_series.notna() & (qty_vehicle_series > 0) &
+                qty_in_ss_series.notna()
+            )
+            df_step.loc[mask, 'Quantity Batches in SS'] = (
+                qty_in_ss_series[mask] / qty_vehicle_series[mask]
+            ).round(2)
+
+        # Обязательный визуальный контроль результатов
+        show_dataframe_preview(
+            df_step,
+            step_name=step_name,
+            focus_columns=STEP_FOCUS_COLUMNS_MAP[counter - 1]
+        )
+
+        saved_state = save_state(df_step)
+
+        continue_flag, df_step, saved_state = confirm_step(
+            step_name=step_name,
+            df_current=df_step,
+            saved_state=saved_state
+        )
+
+        if continue_flag:
+            df_matrix = df_step
+            step_elapsed = time.time() - step_start
+            print(f"    [Успех] Шаг {counter} успешно выполнен за {timedelta(seconds=int(step_elapsed))}")
+            break
+        # При 'retry' цикл запустится заново, позволяя пересчитать количество партий в Safety Stock
+
+
+    #=============== ШАГ 21: ПОИСК КОНФИГУРАЦИИ ДЛЯ УТИЛИЗАЦИИ BEFORE-ДЕТАЛЕЙ ===============
+    counter += 1
+    step_start = time.time()
+    step_name = f"ШАГ {counter}: [{bp_number}] ПОИСК КОНФИГУРАЦИИ ДЛЯ УТИЛИЗАЦИИ BEFORE-ДЕТАЛЕЙ"
+    print_step_header(counter, bp_total_steps, step_name)
+
+    while True:
+        df_step = df_matrix.copy()
+
+        # Загружаем конфигурацию (из кэша, мгновенно)
+        df_config = load_configuration_file()
+
+        if df_config is None or df_config.empty:
+            print("  [Пропуск] Конфигурация недоступна. Заполняем целевые колонки значением '-'.")
+            df_step['Configuration for Old Parts Using Out'] = '-'
+            df_step['Batches for Old Parts Using Out'] = '-'
+            df_step['Transmission'] = '-'
+        else:
+            # Инициализируем целевые колонки
+            df_step['Configuration for Old Parts Using Out'] = '-'
+            df_step['Batches for Old Parts Using Out'] = '-'
+            df_step['Transmission'] = '-'
+
+            # Достаём Batch Plan (одинаковый для всего BP)
+            batch_plan = ''
+            if not df_step.empty:
+                batch_plan = str(df_step.iloc[0].get('Batch Plan', '')).strip()
+
+            batch_plan_missing = (not batch_plan or batch_plan == '-' or batch_plan == 'nan')
+
+            if batch_plan_missing:
+                print("\n  " + "-" * 60)
+                print("  ВНИМАНИЕ: BATCH PLAN НЕ ВВЕДЁН!")
+                print("  Поиск конфигурации невозможен для полей:")
+                print("    • Configuration for Old Parts Using Out")
+                print("    • Batches for Old Parts Using Out")
+                print("    • Transmission")
+                print("  Эти поля останутся пустыми для ВСЕХ деталей в этом BP.")
+                print("  " + "-" * 60)
+            else:
+                # Batch Plan[:3] — префикс для поиска в Batch Code
+                batch_prefix = batch_plan[:3] if len(batch_plan) >= 3 else batch_plan
+
+                # Строим индекс конфигурации: {BOM Product: DataFrame с совпадениями}
+                # (для производительности при многих строках)
+
+                for idx, row in df_step.iterrows():
+                    bom_product = str(row.get('BOM Product', '')).strip()
+                    if not bom_product or bom_product == '-':
+                        continue
+
+                    # Фильтруем по BOM Product
+                    config_matches = df_config[
+                        df_config['BOM Product'].astype(str).str.strip() == bom_product
+                    ]
+                    if config_matches.empty:
+                        continue
+
+                    # Фильтруем по Batch Code (startswith префикса)
+                    config_match = config_matches[
+                        config_matches['Batch Code'].astype(str).str.startswith(batch_prefix, na=False)
+                    ]
+
+                    if config_match.empty:
+                        continue
+
+                    # Configuration: берём ПЕРВОЕ значение
+                    config_value = str(config_match.iloc[0].get('Configuration', '')).strip()
+                    if config_value and config_value != 'nan':
+                        df_step.at[idx, 'Configuration for Old Parts Using Out'] = config_value
+
+                    # Batches и Transmission: собираем ВСЕ значения через '\n'
+                    all_batch_codes = []
+                    all_transmissions = []
+                    for _, row_match in config_match.iterrows():
+                        bc = str(row_match.get('Batch Code', '')).strip()
+                        trans = str(row_match.get('Transmission', '')).strip()
+
+                        # Пропускаем пустые
+                        if (not bc or bc == 'nan') and (not trans or trans == 'nan'):
+                            continue
+
+                        if bc and bc != 'nan':
+                            all_batch_codes.append(bc)
+                        if trans and trans != 'nan':
+                            all_transmissions.append(trans)
+
+                    if all_batch_codes:
+                        df_step.at[idx, 'Batches for Old Parts Using Out'] = '\n'.join(all_batch_codes)
+                    if all_transmissions:
+                        df_step.at[idx, 'Transmission'] = '\n'.join(all_transmissions)
+
+        # Обязательный визуальный контроль результатов
+        show_dataframe_preview(
+            df_step,
+            step_name=step_name,
+            focus_columns=STEP_FOCUS_COLUMNS_MAP[counter - 1]
+        )
+
+        saved_state = save_state(df_step)
+
+        continue_flag, df_step, saved_state = confirm_step(
+            step_name=step_name,
+            df_current=df_step,
+            saved_state=saved_state
+        )
+
+        if continue_flag:
+            df_matrix = df_step
+            step_elapsed = time.time() - step_start
+            print(f"    [Успех] Шаг {counter} успешно выполнен за {timedelta(seconds=int(step_elapsed))}")
+            break
+        # При 'retry' цикл запустится заново, позволяя повторить поиск
+
+
+    #=============== ШАГ 22: ПОИСК УПАКОВОЧНЫХ ДАННЫХ ДЛЯ BEFORE-ДЕТАЛЕЙ ===============
+    counter += 1
+    step_start = time.time()
+    step_name = f"ШАГ {counter}: [{bp_number}] ПОИСК УПАКОВОЧНЫХ ДАННЫХ ДЛЯ BEFORE-ДЕТАЛЕЙ"
+    print_step_header(counter, bp_total_steps, step_name)
+
+    while True:
+        df_step = df_matrix.copy()
+
+        # Инициализируем все 18 Before-колонок значением np.nan
+        for col in BEFORE_PAC_COLS:
+            df_step[col] = np.nan
+
+        # Собираем уникальные Before-детали с их индексами
+        before_parts, before_names = collect_unique_parts(
+            df_step,
+            part_col='Part No. Before',
+            name_col='Part Name Before'
+        )
+
+        # Проверка на отсутствие Before-деталей
+        if not before_parts:
+            print(f"\n  [Информация] В BP нет Before-деталей. Шаг {counter} пропущен.")
+            print("  Все Before-колонки заполнены значением np.nan (нет данных).")
+
+            show_dataframe_preview(
+                df_step,
+                step_name=step_name,
+                focus_columns=STEP_FOCUS_COLUMNS_MAP[counter - 1]
+            )
+
+            saved_state = save_state(df_step)
+
+            continue_flag, df_step, saved_state = confirm_step(
+                step_name=step_name,
+                df_current=df_step,
+                saved_state=saved_state
+            )
+
+            if continue_flag:
+                df_matrix = df_step
+                step_elapsed = time.time() - step_start
+                print(f"    [Пропуск] Шаг {counter} выполнен за {timedelta(seconds=int(step_elapsed))}")
+                break
+            continue
+
+        total_unique = len(before_parts)
+        packing_dir = INPUT_PACKING_LIST_DIR
+
+        # Выводим список уникальных Before-деталей
+        print(f"\n  Всего уникальных Before-деталей: {total_unique}")
+        print(f"  Директория упаковочных листов: '{packing_dir}'")
+        print("-" * 60)
+        print("  СПИСОК BEFORE-ДЕТАЛЕЙ ДЛЯ ОБРАБОТКИ:")
+        for i, (part_no, idx_list) in enumerate(sorted(before_parts.items()), 1):
+            name = before_names.get(part_no, '')
+            name_display = name[:60] + '...' if len(name) > 60 else name
+            dup_info = f" [дубликатов: {len(idx_list)}]" if len(idx_list) > 1 else ""
+            print(f"    {i:>2}. {part_no} — {name_display}{dup_info}")
+        print("-" * 60)
+        print("  ИНСТРУКЦИЯ:")
+        print("    1. Для каждой уникальной Before-детали найдите её номер партии в SCM.")
+        print("    2. Найдите соответствующий упаковочный лист в папке на общем диске.")
+        print(f"    3. Скопируйте файл в директорию проекта: '{packing_dir}'")
+        print("    4. Введите имя файла упаковочного листа (Enter — пропустить деталь).")
+        print("    5. Затем для каждой детали введите тип упаковки и штабелирование.")
+        print("    6. Пустой ввод (Enter) оставляет поле неопределённым (np.nan).")
+        print("-" * 60)
+
+        wait_for_user("\n  Нажмите Enter, чтобы начать ввод...")
+
+        # Результаты по каждой уникальной детали
+        found_results: Dict[str, Dict] = {}      # part_no -> данные из упаковочного листа
+        not_found_parts: List[str] = []          # детали без упаковочного листа
+
+        # Интерактив по каждой уникальной Before-детали
+        for i, part_no in enumerate(sorted(before_parts.keys()), 1):
+            part_name = before_names.get(part_no, '')
+            print(f"\n  [{i}/{total_unique}] Before-деталь: {part_no}")
+            display_name = part_name[:70] + '...' if len(part_name) > 70 else part_name
+            print(f"  Название: {display_name}")
+
+            # --- 1. Загрузка упаковочного листа (если есть) ---
+            packaging: Optional[Dict[str, Any]] = None
+            while True:
+                filename = ask_user_input(
+                    "  Имя файла упаковочного листа [Enter — пропустить]: "
+                ).strip()
+
+                if not filename:
+                    print("    → Пропущено. Данные из файла будут np.nan.")
+                    not_found_parts.append(part_no)
+                    break
+
+                df_batch = load_packing_list_file(filename, packing_dir)
+                if df_batch is None:
+                    print(f"    [Ошибка] Не удалось загрузить '{filename}'.")
+                    print(f"    Проверьте, что файл лежит в '{packing_dir}', и повторите ввод.")
+                    continue
+
+                packaging = extract_packaging_data(df_batch, part_no)
+                if packaging is None:
+                    print(f"    [Внимание] Деталь '{part_no}' не найдена в файле '{filename}'.")
+                    print("    Попробуйте другой файл или нажмите Enter, чтобы пропустить.")
+                    continue
+
+                found_results[part_no] = packaging
+                print(f"    ✓ Данные из файла '{filename}' успешно извлечены.")
+                break
+
+            # --- 2. Пользовательский ввод (тип упаковки, штабелирование) ---
+            user_inputs = get_packaging_user_inputs(
+                part_no=part_no,
+                part_name=part_name,
+                branch='Before'
+            )
+
+            # --- 3. Заполнение всех 18 колонок для этой детали (включая дубликаты) ---
+            apply_packaging_to_rows(
+                df=df_step,
+                parts_map=before_parts,
+                part_no=part_no,
+                packaging=packaging,
+                user_inputs=user_inputs,
+                branch='Before'
+            )
+
+        # --- Итоговая сводка ---
+        print("\n" + "=" * 60)
+        print("  ИТОГОВЫЙ СВОД УПАКОВОЧНЫХ ДАННЫХ BEFORE:")
+        print("=" * 60)
+        for part_no in sorted(before_parts.keys()):
+            name = before_names.get(part_no, '')
+            name_display = name[:50] + '...' if len(name) > 50 else name
+
+            if part_no in found_results:
+                pkg = found_results[part_no]
+                qty_display = data_absence_marker(pkg.get('parts_qty_box'))
+                box_display = data_absence_marker(pkg.get('box_size'))
+                pal_display = data_absence_marker(pkg.get('pallet_size'))
+                print(f"  ✓ {part_no} — {name_display}")
+                print(f"      Qty/Box={qty_display}, Box={box_display}, Pallet={pal_display}")
+            else:
+                print(f"  ✗ {part_no} — {name_display}: упаковочный лист не загружен")
+        print("=" * 60)
+
+        if not_found_parts:
+            print(f"\n  [Внимание] Для {len(not_found_parts)} Before-деталей упаковочный лист не загружен.")
+            print("  Данные из файла для них заполнены np.nan (нет данных).")
+
+        # Обязательный визуальный контроль результатов
+        show_dataframe_preview(
+            df_step,
+            step_name=step_name,
+            focus_columns=STEP_FOCUS_COLUMNS_MAP[counter - 1]
+        )
+
+        saved_state = save_state(df_step)
+
+        continue_flag, df_step, saved_state = confirm_step(
+            step_name=step_name,
+            df_current=df_step,
+            saved_state=saved_state
+        )
+
+        if continue_flag:
+            df_matrix = df_step
+            step_elapsed = time.time() - step_start
+            print(f"    [Успех] Шаг {counter} успешно выполнен за {timedelta(seconds=int(step_elapsed))}")
+            break
+        # При 'retry' цикл запустится заново, позволяя повторить ввод файлов
+
+
+    #=============== ШАГ 23: ПОИСК УПАКОВОЧНЫХ ДАННЫХ ДЛЯ AFTER-ДЕТАЛЕЙ ===============
+    counter += 1
+    step_start = time.time()
+    step_name = f"ШАГ {counter}: [{bp_number}] ПОИСК УПАКОВОЧНЫХ ДАННЫХ ДЛЯ AFTER-ДЕТАЛЕЙ"
+    print_step_header(counter, bp_total_steps, step_name)
+
+    while True:
+        df_step = df_matrix.copy()
+
+        # Инициализируем все 18 After-колонок значением np.nan
+        for col in AFTER_PAC_COLS:
+            df_step[col] = np.nan
+
+        # Собираем уникальные Before- и After-детали с их индексами
+        before_parts, _ = collect_unique_parts(
+            df_step,
+            part_col='Part No. Before',
+            name_col='Part Name Before'
+        )
+        after_parts, after_names = collect_unique_parts(
+            df_step,
+            part_col='Part No. After',
+            name_col='Part Name After'
+        )
+
+        # Проверка на отсутствие After-деталей
+        if not after_parts:
+            print(f"\n  [Информация] В BP нет After-деталей. Шаг {counter} пропущен.")
+            print("  Все After-колонки заполнены значением np.nan (нет данных).")
+
+            show_dataframe_preview(
+                df_step,
+                step_name=step_name,
+                focus_columns=STEP_FOCUS_COLUMNS_MAP[counter - 1]
+            )
+
+            saved_state = save_state(df_step)
+
+            continue_flag, df_step, saved_state = confirm_step(
+                step_name=step_name,
+                df_current=df_step,
+                saved_state=saved_state
+            )
+
+            if continue_flag:
+                df_matrix = df_step
+                step_elapsed = time.time() - step_start
+                print(f"    [Пропуск] Шаг {counter} выполнен за {timedelta(seconds=int(step_elapsed))}")
+                break
+            continue
+
+        total_unique = len(after_parts)
+
+        # === ЭТАП 1: АВТОКОПИРОВАНИЕ BEFORE → AFTER ===
+        print("\n" + "=" * 60)
+        print("  АВТОКОПИРОВАНИЕ BEFORE → AFTER")
+        print("=" * 60)
+
+        copied_parts = copy_packaging_before_to_after(df_step, before_parts, after_parts)
+
+        if copied_parts:
+            print(f"\n  Автоматически скопировано для {len(copied_parts)} After-деталей:")
+            for part_no in sorted(copied_parts.keys()):
+                print(f"    ⇉ {part_no}")
+        else:
+            print("  Нет совпадающих After-деталей с Before.")
+
+        # Убираем скопированные детали из дальнейшей обработки
+        after_parts_to_process = {
+            part_no: idx_list
+            for part_no, idx_list in after_parts.items()
+            if part_no not in copied_parts
+        }
+
+        # Словари для результатов
+        found_after: Dict[str, Dict] = {}
+        not_found_after: List[str] = []
+
+        if not after_parts_to_process:
+            print("\n  [Информация] Все After-детали скопированы из Before. Ручной ввод не требуется.")
+        else:
+            # === ЭТАП 2: ИНТЕРАКТИВНАЯ ЗАГРУЗКА ДЛЯ ОСТАВШИХСЯ AFTER-ДЕТАЛЕЙ ===
+            packing_dir = INPUT_PACKING_LIST_DIR
+
+            print("\n" + "=" * 60)
+            print(f"  ЗАГРУЗКА УПАКОВКИ ДЛЯ {len(after_parts_to_process)} AFTER-ДЕТАЛЕЙ")
+            print("=" * 60)
+            print("  СПИСОК AFTER-ДЕТАЛЕЙ ДЛЯ ОБРАБОТКИ:")
+            for i, part_no in enumerate(sorted(after_parts_to_process.keys()), 1):
+                name = after_names.get(part_no, '')
+                name_display = name[:60] + '...' if len(name) > 60 else name
+                print(f"    {i:>2}. {part_no} — {name_display}")
+            print("-" * 60)
+            print("  ИНСТРУКЦИЯ:")
+            print("    1. Для каждой After-детали найдите её упаковочный лист.")
+            print(f"    2. Скопируйте файл в директорию проекта: '{packing_dir}'")
+            print("    3. Введите имя файла упаковочного листа (Enter — пропустить деталь).")
+            print("    4. Затем введите тип упаковки и штабелирование.")
+            print("    5. Пустой ввод (Enter) оставляет поле неопределённым (np.nan).")
+            print("-" * 60)
+
+            wait_for_user("\n  Нажмите Enter, чтобы начать ввод...")
+
+            # Интерактив по каждой уникальной After-детали
+            for i, part_no in enumerate(sorted(after_parts_to_process.keys()), 1):
+                part_name = after_names.get(part_no, '')
+                print(f"\n  [{i}/{len(after_parts_to_process)}] After-деталь: {part_no}")
+                display_name = part_name[:70] + '...' if len(part_name) > 70 else part_name
+                print(f"  Название: {display_name}")
+
+                # --- 1. Загрузка упаковочного листа (если есть) ---
+                packaging: Optional[Dict[str, Any]] = None
+                while True:
+                    filename = ask_user_input(
+                        "  Имя файла упаковочного листа [Enter — пропустить]: "
+                    ).strip()
+
+                    if not filename:
+                        print("    → Пропущено. Данные из файла будут np.nan.")
+                        not_found_after.append(part_no)
+                        break
+
+                    df_batch = load_packing_list_file(filename, packing_dir)
+                    if df_batch is None:
+                        print(f"    [Ошибка] Не удалось загрузить '{filename}'.")
+                        print(f"    Проверьте, что файл лежит в '{packing_dir}', и повторите ввод.")
+                        continue
+
+                    packaging = extract_packaging_data(df_batch, part_no)
+                    if packaging is None:
+                        print(f"    [Внимание] Деталь '{part_no}' не найдена в файле '{filename}'.")
+                        print("    Попробуйте другой файл или нажмите Enter, чтобы пропустить.")
+                        continue
+
+                    found_after[part_no] = packaging
+                    print(f"    ✓ Данные из файла '{filename}' успешно извлечены.")
+                    break
+
+                # --- 2. Пользовательский ввод (тип упаковки, штабелирование) ---
+                user_inputs = get_packaging_user_inputs(
+                    part_no=part_no,
+                    part_name=part_name,
+                    branch='After'
+                )
+
+                # --- 3. Заполнение всех 18 колонок для этой детали (включая дубликаты) ---
+                apply_packaging_to_rows(
+                    df=df_step,
+                    parts_map=after_parts_to_process,
+                    part_no=part_no,
+                    packaging=packaging,
+                    user_inputs=user_inputs,
+                    branch='After'
+                )
+
+        # --- Итоговая сводка ---
+        print("\n" + "=" * 60)
+        print("  ИТОГОВЫЙ СВОД УПАКОВОЧНЫХ ДАННЫХ AFTER:")
+        print("=" * 60)
+        for part_no in sorted(after_parts.keys()):
+            name = after_names.get(part_no, '')
+            name_display = name[:50] + '...' if len(name) > 50 else name
+
+            if part_no in copied_parts:
+                print(f"  ⇉ {part_no} — {name_display}: скопировано из Before")
+            elif part_no in found_after:
+                pkg = found_after[part_no]
+                qty_display = data_absence_marker(pkg.get('parts_qty_box'))
+                box_display = data_absence_marker(pkg.get('box_size'))
+                pal_display = data_absence_marker(pkg.get('pallet_size'))
+                print(f"  ✓ {part_no} — {name_display}")
+                print(f"      Qty/Box={qty_display}, Box={box_display}, Pallet={pal_display}")
+            else:
+                print(f"  ✗ {part_no} — {name_display}: упаковочный лист не загружен")
+        print("=" * 60)
+
+        if not_found_after:
+            print(f"\n  [Внимание] Для {len(not_found_after)} After-деталей упаковочный лист не загружен.")
+            print("  Данные из файла для них заполнены np.nan (нет данных).")
+
+        # Обязательный визуальный контроль результатов
+        show_dataframe_preview(
+            df_step,
+            step_name=step_name,
+            focus_columns=STEP_FOCUS_COLUMNS_MAP[counter - 1]
+        )
+
+        saved_state = save_state(df_step)
+
+        continue_flag, df_step, saved_state = confirm_step(
+            step_name=step_name,
+            df_current=df_step,
+            saved_state=saved_state
+        )
+
+        if continue_flag:
+            df_matrix = df_step
+            step_elapsed = time.time() - step_start
+            print(f"    [Успех] Шаг {counter} успешно выполнен за {timedelta(seconds=int(step_elapsed))}")
+            break
+        # При 'retry' цикл запустится заново, позволяя повторить ввод файлов
+
+
+    #=============== ШАГ 24: УПОРЯДОЧИВАНИЕ КОЛОНОК ===============
+    counter += 1
+    step_start = time.time()
+    step_name = f"ШАГ {counter}: [{bp_number}] УПОРЯДОЧИВАНИЕ КОЛОНОК"
+    print_step_header(counter, bp_total_steps, step_name)
+
+    while True:
+        existing_cols = [col for col in BP_DATA_COLUMNS_ORDER if col in df_matrix.columns]
+        missing_cols_in_order = sorted(set(BP_DATA_COLUMNS_ORDER) - set(existing_cols))
+        extra_cols = sorted(set(df_matrix.columns) - set(BP_DATA_COLUMNS_ORDER))
+
+        print(f"  Выбрано колонок для финального вывода: {len(existing_cols)} из {len(BP_DATA_COLUMNS_ORDER)}")
+
+        if missing_cols_in_order:
+            print(f"  Отсутствуют в данных ({len(missing_cols_in_order)}):")
+            for col in missing_cols_in_order:
+                print(f"    - {col}")
+
+        if extra_cols:
+            print(f"  [Внимание] Лишние колонки будут исключены ({len(extra_cols)}):")
+            for col in extra_cols:
+                print(f"    - {col}")
+
+        df_step = df_matrix[existing_cols].copy()
+
+        show_dataframe_preview(
+            df_step,
+            step_name=step_name,
+            focus_columns=STEP_FOCUS_COLUMNS_MAP[counter - 1]
+        )
+
+        saved_state = save_state(df_step)
+
+        continue_flag, df_step, saved_state = confirm_step(
+            step_name=step_name,
+            df_current=df_step,
+            saved_state=saved_state
+        )
+
+        if continue_flag:
+            df_matrix = df_step
+            step_elapsed = time.time() - step_start
+            print(f"    [Успех] Шаг {counter} успешно выполнен за {timedelta(seconds=int(step_elapsed))}")
+            break
+        # При 'retry' цикл запустится заново, позволяя повторить упорядочивание
+
+
+    #=============== ШАГ 25: СОХРАНЕНИЕ РЕЗУЛЬТАТА ===============
+    counter += 1
+    step_start = time.time()
+    step_name = f"ШАГ {counter}: [{bp_number}] СОХРАНЕНИЕ РЕЗУЛЬТАТА"
+    print_step_header(counter, bp_total_steps, step_name)
+
+    bp_dataframe: Dict[str, Any] = {
         'bp_number': bp_number,
-        'dataframe': df_bp_new,
+        'dataframe': df_matrix,
         'processing_time_seconds': time.time() - bp_start_time
     }
 
     step_elapsed = time.time() - step_start
-    print(f"  [Время шага 17: {timedelta(seconds=int(step_elapsed))}]")
+    print(f"  [Успех] Шаг {counter} успешно выполнен за {timedelta(seconds=int(step_elapsed))}")
 
     # Выводим итоговое время обработки BP
     total_time = bp_dataframe['processing_time_seconds']
-    print(f"\n  [ИТОГО ВРЕМЯ ОБРАБОТКИ {bp_number}: {timedelta(seconds=int(total_time))}]")
+    print(f"\n  [ИТОГО] ВРЕМЯ ОБРАБОТКИ {bp_number}: {timedelta(seconds=int(total_time))}")
     print(f"  ({(total_time/60):.1f} минут)\n")
 
     return bp_dataframe
-
-
-def main():
-    """
-    Главная функция модуля bp_refactoring.
-
-    Выполняет пошаговую обработку Excel файлов BP.
-
-    Этапы:
-        1. Загрузка BOM файла (обязательно)
-        2. Проверка новых BP в системе
-        3. Поиск BP файлов
-        4. Пошаговая обработка каждого найденного BP файла
-        5. Возврат словаря обработанных DataFrame'ов
-
-    При отсутствии новых BP предоставляет возможность ручного ввода
-    номеров BP для обработки.
-
-    Возвращается:
-        dict: Словарь обработанных DataFrame'ов, где ключ - номер BP,
-              значение - обработанный DataFrame, или None при отсутствии обработки.
-
-    Исключения:
-        SystemExit: при критических ошибках (отсутствие BOM файла и т.д.)
-    """
-    print("""
-        ╔══════════════════════════════════════════════════════════════╗
-        ║                                                              ║
-        ║              ПОШАГОВАЯ ОБРАБОТКА EXCEL ФАЙЛОВ BP             ║
-        ║                                                              ║
-        ╚══════════════════════════════════════════════════════════════╝
-        """)
-
-    print("\nБудут обработаны следующие шаги для каждого BP файла:")
-    print("   1. Загрузка BOM (Bill of Materials)")
-    print("   2. Поиск новых тех. изменений (Breakpoint)")
-    print("   3. Загрузка BP файла и выбор колонок для обработки")
-    print("   4. Выбор нужных колонок для обработки")
-    print("   5. Статус тех. изменения (Breakpoint)")
-    print("   6. Количество старых деталей на складе Safety Stock")
-    print("   7. Перевод названий деталей")
-    print("   8. Поиск официальных названий поставщиков")
-    print("   9. Статусы локализации поставщиков")
-    print("   10. Перевод описаний и решений")
-    print("   11. Перевод цвета деталей")
-    print("   12. Обработка рабочих центров")
-    print("   13. Перевод требований по дальнейшему использованию или утилизации")
-    print("   14. Перевод требований по взаимозаменяемости")
-    print("   15. Проверка наличия деталей в BOM")
-
-    wait_for_user()
-
-    # ЭТАП 1: Загрузка BOM файла
-    print("\n" + "=" * 60)
-    print("ЭТАП 1: Загрузка BOM файла")
-    print("=" * 60)
-    df_bom = load_excel_file('bom.xlsx', "BOM файл")
-    if df_bom is None:
-        print("\nКритическая ошибка: Не найден или не загружен файл bom.xlsx!")
-        print("Убедитесь, что файл bom.xlsx находится в той же папке и имеет правильный формат.")
-        wait_for_user()
-        sys.exit(1)
-
-    # Пауза после загрузки BOM файла
-    wait_for_user()
-
-    # ЭТАП 2: Проверка новых BP
-    print("\n" + "=" * 60)
-    print("ЭТАП 2: Проверка новых BP в системе")
-    print("=" * 60)
-
-    new_bp_set = new_bp_check()
-
-    if new_bp_set is None:
-        print("\n  Ошибка при проверке новых BP. Продолжение невозможно.")
-        wait_for_user()
-        sys.exit(1)
-
-    # Автоматически найденные BP файлы
-    auto_bp_files = [f"{bp}.xlsx" for bp in new_bp_set] if new_bp_set else []
-
-    # Если есть новые BP, показываем сообщение о необходимости скачать их
-    if len(new_bp_set) > 0:
-        print("\n" + "!" * 60)
-        print("  ВНИМАНИЕ: Найдены новые BP, которые отсутствуют в breakpoint_data.xlsx!")
-        print("!" * 60)
-        print("\n  Действия пользователя:")
-        print("    1. Скачайте из системы G-BOM все отсутствующие Excel файлы BP")
-        print("    2. Поместите скачанные файлы в текущую папку")
-        print("    3. Убедитесь, что файлы имеют формат: BP<номер>.xlsx")
-        print("\n  После скачивания файлов программа продолжит работу.")
-
-        wait_for_user("\n  Нажмите Enter, когда все файлы будут скачаны и помещены в текущую папку...")
-
-    # ВСЕГДА спрашиваем о ручном вводе дополнительных BP
-    print("\n" + "=" * 60)
-    print("РУЧНОЙ ВВОД BP НОМЕРОВ (ОПЦИОНАЛЬНО)")
-    print("=" * 60)
-
-    if auto_bp_files:
-        print(f"\n  Автоматически найдено {len(auto_bp_files)} BP для обработки.")
-        print("  Вы можете добавить дополнительные BP вручную.")
-    else:
-        print("\n  Автоматически найденных BP нет.")
-        print("  Вы можете указать BP номера для обработки вручную.")
-
-    print("-" * 60)
-
-    while True:
-        try:
-            manual_input = input("\n  Хотите добавить BP номера для обработки вручную? (да/нет): ").strip().lower()
-            if manual_input == 'да':
-                break
-            elif manual_input == 'нет':
-                break
-            else:
-                print("  Некорректный ввод. Пожалуйста, введите 'да' или 'нет'.")
-        except KeyboardInterrupt:
-            print()
-            while True:
-                confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
-                if confirm == 'да':
-                    print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-                    sys.exit(0)
-                elif confirm == 'нет':
-                    print("\nПродолжаем работу...")
-                    break
-                else:
-                    print("Пожалуйста, введите 'да' или 'нет'")
-
-    manual_bp_files = []
-
-    if manual_input == 'да':
-        print("\n  ИНСТРУКЦИЯ ПО ВВОДУ BP НОМЕРОВ:")
-        print("    1. Вводите номера BP в формате: BP<номер> (с префиксом 'BP')")
-        print("    2. После ввода каждого номера нажмите Enter")
-        print("    3. Для завершения ввода оставьте строку пустой и нажмите Enter")
-        print("    4. Пример: BP12345")
-        print("-" * 60)
-
-        while True:
-            try:
-                bp_input = input("\n  Введите номер BP (или Enter для завершения): ").strip().upper()
-
-                if bp_input == '':
-                    if len(manual_bp_files) == 0:
-                        print("  Не введено ни одного BP.")
-                    break
-
-                # Проверяем формат: должен начинаться с BP и содержать только цифры после этого
-                if bp_input.startswith('BP') and bp_input[2:].isdigit():
-                    # Добавляем .xlsx если нужно
-                    bp_filename = bp_input if bp_input.endswith('.xlsx') else f"{bp_input}.xlsx"
-
-                    # Проверяем, существует ли файл в текущей папке
-                    if os.path.exists(bp_filename):
-                        manual_bp_files.append(bp_filename)
-                        print(f"    → {bp_filename} добавлен в список для обработки")
-                    else:
-                        print(f"    ОШИБКА: Файл '{bp_filename}' не найден в текущей папке!")
-                        print("    Убедитесь, что файл скачан и находится в текущей директории.")
-                        continue
-                else:
-                    print(f"    ОШИБКА: '{bp_input}' не является корректным номером BP")
-                    print("    Используйте формат: BP26002813")
-                    continue
-
-            except KeyboardInterrupt:
-                print()
-                while True:
-                    confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
-                    if confirm == 'да':
-                        print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-                        sys.exit(0)
-                    elif confirm == 'нет':
-                        print("\nПродолжаем работу...")
-                        break
-                    else:
-                        print("Пожалуйста, введите 'да' или 'нет'")
-
-    # Объединяем автоматически найденные BP с введёнными вручную
-    bp_files = list(set(auto_bp_files + manual_bp_files))
-
-    if not bp_files:
-        print("\n  Нет BP файлов для обработки. Программа завершает работу.")
-        wait_for_user()
-        sys.exit(0)
-
-    print("\n" + "=" * 60)
-    print("  ИТОГОВЫЙ СПИСОК BP ДЛЯ ОБРАБОТКИ")
-    print("=" * 60)
-
-    if auto_bp_files:
-        print(f"\n  Автоматически найденные BP ({len(auto_bp_files)}):")
-        for f in sorted(auto_bp_files):
-            print(f"    • {f}")
-
-    if manual_bp_files:
-        print(f"\n  Введённые вручную BP ({len(manual_bp_files)}):")
-        for f in sorted(manual_bp_files):
-            print(f"    • {f}")
-
-    print(f"\n  Всего уникальных BP для обработки: {len(bp_files)}")
-
-    wait_for_user("\n  Нажмите Enter, чтобы продолжить...")
-
-    # ЭТАП 3: Проверка наличия BP файлов
-    print("\n" + "=" * 60)
-    print("ЭТАП 3: Проверка наличия BP файлов")
-    print("=" * 60)
-
-    # Проверяем, какие файлы из итогового списка bp_files реально существуют
-    print("\n  Проверка наличия файлов:")
-    existing_files = []
-    missing_files = []
-
-    for bp_file in bp_files:
-        if os.path.exists(bp_file):
-            print(f"    {bp_file} - найден")
-            existing_files.append(bp_file)
-        else:
-            print(f"    {bp_file} - НЕ НАЙДЕН")
-            missing_files.append(bp_file)
-
-    if missing_files:
-        print("\n  Предупреждение: Не все файлы найдены!")
-        print("  Отсутствуют:", missing_files)
-        while True:
-            try:
-                proceed = input("\n  Продолжить с имеющимися файлами? (да/нет): ").strip().lower()
-                if proceed == 'да':
-                    break
-                elif proceed == 'нет':
-                    print("  Программа завершена. Скачайте недостающие файлы и запустите снова.")
-                    sys.exit(0)
-                else:
-                    print("  Некорректный ввод. Пожалуйста, введите 'да' или 'нет'.")
-            except KeyboardInterrupt:
-                print()
-                while True:
-                    confirm = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
-                    if confirm == 'да':
-                        print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-                        sys.exit(0)
-                    elif confirm == 'нет':
-                        print("\nПродолжаем работу...")
-                        break
-                    else:
-                        print("Пожалуйста, введите 'да' или 'нет'")
-
-    # Используем существующие файлы для обработки
-    bp_files_to_process = existing_files
-
-    if not bp_files_to_process:
-        print("\n  Нет доступных BP файлов для обработки. Программа завершает работу.")
-        wait_for_user()
-        sys.exit(0)
-
-    print(f"\n  Будет обработано файлов: {len(bp_files_to_process)}")
-    for i, f in enumerate(bp_files_to_process, 1):
-        print(f"    {i}. {f}")
-
-    # Пауза после поиска всех BP файлов
-    wait_for_user()
-
-    # Обработка каждого BP файла
-    processed_results = {}
-
-    for i, bp_file in enumerate(bp_files_to_process, 1):
-        print("\n" + "=" * 60)
-        print(f"ОБРАБОТКА BP ФАЙЛА {i}/{len(bp_files_to_process)}: {bp_file}")
-        print("=" * 60)
-
-        print(f"\nТекущий файл: {bp_file}")
-
-        wait_for_user("\nНажмите Enter для начала обработки этого файла...")
-
-        result = process_bp_file(bp_file, df_bom)
-        if result:
-            bp_num = result['bp_number']
-            processed_results[result['bp_number']] = result['dataframe']
-            # Сохранение бэкапа
-            save_processed_bp(result['dataframe'], bp_num)
-
-        if i < len(bp_files_to_process):
-            wait_for_user("\nФайл обработан. Нажмите Enter для перехода к следующему файлу...")
-
-    # Итоги
-    print("\n" + "=" * 60)
-    print("ОБРАБОТКА ЗАВЕРШЕНА")
-    print("=" * 60)
-    print(f"\nОбработано файлов: {len(processed_results)}/{len(bp_files_to_process)}")
-
-    if processed_results:
-        print("\nОбработанные Breakpoint'ы:")
-        for bp_number in processed_results:
-            print(f"   - {bp_number}")
-        return processed_results
-
-    print("\nНе обработано ни одного файла.")
-    return None

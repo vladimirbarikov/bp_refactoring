@@ -1,0 +1,12 @@
+# Breakpoint Refactoring Tool - Development dependencies
+# Install: pip install -r requirements-dev.txt
+#
+# Runtime dependencies are pulled in via the '-r requirements.txt' line below.
+
+-r requirements.txt
+
+# Build tool: creates BREAKPOINT_REFACTORING_TOOL executable
+pyinstaller>=6.22.3
+
+# Static code analysis (uses # pylint: disable comments in source)
+pylint>=4.0.9

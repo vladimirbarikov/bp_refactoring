@@ -1,11 +1,23 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 a = Analysis(
-    ['bp_main.py', 'bp_processing.py', 'bp_summary.py'],   # все три файла
+    ['main.py'],
     pathex=['.'],
     binaries=[],
     datas=[],
-    hiddenimports=['pandas', 'numpy', 'openpyxl', 'xlsxwriter'],
+    hiddenimports=[
+        'pandas',
+        'numpy',
+        'openpyxl',
+        'xlsxwriter',
+        # Internal project package
+        'py_lib',
+        'py_lib.config.core',
+        'py_lib.engine.etl',
+        'py_lib.pipeline.processing',
+        'py_lib.pipeline.find_pairs',
+        'py_lib.ui.interaction',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -21,7 +33,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='BREAKPOINT_REFACTORING_TOOL',
+    name='BREAKPOINT_REFACTORING_TOOL_V2',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

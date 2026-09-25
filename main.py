@@ -2,719 +2,763 @@
 # -*- coding: utf-8 -*-
 # pylint: disable=line-too-long
 # pylint: disable=too-many-lines
+# pylint: disable=import-outside-toplevel
 """
-BP Refactoring Tool - Точка входа
+BP Refactoring Tool - Точка входа (V2.0)
 
 Этот модуль является главной точкой входа в приложение Breakpoint Refactoring Tool.
 
-Он координирует выполнение всех этапов обработки технических изменений:
-    1. Проверка наличия новых BP для скачивания из системы G-BOM
-    2. Пошаговая обработка Excel файлов BP через модуль bp_refactoring
-    3. Формирование итоговой сводной таблицы через модуль bp_summary
-    4. Сохранение результата в Excel файл с форматированием
+Он выполняет оркестрацию полного цикла обработки технических изменений (BP):
+
+    ЭТАП 1: ПРОВЕРКА НОВЫХ НОМЕРОВ ТЕХНИЧЕСКИХ ИЗМЕНЕНИЙ (BREAKPOINT -> BP)
+        - Аудит входящего отчёта 'breakpoint_report'
+        - Аудит накопленной базы 'breakpoint_data'
+        - Вычисление разности множеств (новые BP, требующие скачивания из G-BOM)
+        - Ручной ввод дополнительных BP-номеров (опционально)
+
+    ЭТАП 2: ПРОВЕРКА НАЛИЧИЯ BP ФАЙЛОВ (BP<номер>.xlsx)
+        - Сканирование директории 'input_breakpoint_files'
+        - Сверка ожидаемых файлов с физически присутствующими
+        - Возможность докачать отсутствующие файлы или пропустить их
+
+    ЭТАП 3: ПОТОКОВАЯ ОБРАБОТКА BP И СОХРАНЕНИЕ (YYYY-mm-dd_breakpoint_data.xlsx)
+        - Пошаговая обработка каждого BP через py_lib.pipeline.processing
+        - Автономный бэкап каждого BP в 'output_backup_files'
+        - Инкрементальная транзакционная запись в глобальную базу 'breakpoint_data'
+
+    ЭТАП 4: ИТОГИ
+        - Сводка обработанных BP
+        - Общее время работы программы
 
 Модуль обеспечивает:
     - Интерактивное взаимодействие с пользователем через консоль
     - Сохранение состояния обработки между запусками
-    - Автоматическую загрузку последнего обработанного файла
-    - Форматирование выходного Excel файла с заданными стилями
+    - Безопасную инкрементальную запись результатов (транзакционность)
+    - Автоматическое резервное копирование обработанных BP
 
-Версия: 1.0
-Совместимость: Python 3.12.3+, Pandas 3.0.2+, OpenPyXL 3.1.5+
+Использование:
+    python main.py
+
+Версия: 2.0
+Совместимость: Python 3.14.4+, Pandas 3.0.3+, OpenPyXL 3.1.5+
 Поддержка: PLD Engineering Center
 Дата создания: 2026-05-14
+Дата изменения: 2026-09-24
 Лицензия: MIT
 Статус: Production
 """
+
 import os
-import re
 import sys
+import time
 import traceback
 import warnings
-import time
-from datetime import datetime, timedelta
-from typing import Optional, List
+from datetime import timedelta
+from typing import Any, Dict, Optional
 
 import pandas as pd
-import numpy as np
-from pandas.errors import EmptyDataError, ParserError
-from openpyxl.utils.exceptions import InvalidFileException
 
-from bp_processing import main as processing_main
-from bp_summary import main as summary_main
+from py_lib.config.core import (
+    # Пути к директориям
+    # --- Входные данные ---
+    INPUT_BREAKPOINT_DATA_DIR,
+    INPUT_BREAKPOINT_REPORT_DIR,
+    INPUT_BREAKPOINT_FILES_DIR,
+    # --- Выходные данные ---
+    OUTPUT_BACKUP_ROOT,
+    OUTPUT_BREAKPOINT_DATA_ROOT,
+
+    # Шаги обработки технических изменений
+    BP_STEP_DESCRIPTIONS,
+
+    # Префиксы файлов входных/выходных данных
+    BP_FILE_PREFIX,
+    BP_DATA_PREFIX,
+    BP_REPORT_PREFIX,
+
+    # Колонки с полными данными
+    BP_REPORT_COLS,
+
+    # Ключевые колонки
+    BP_REPORT_KEY_COL,
+    BP_DATA_KEY_COL,
+
+    # Колонки по типам данных
+    BP_DATA_INT_COLS,
+    BP_DATA_DATETIME_COLS,
+    BP_DATA_TRANSLATION_COLS,
+)
+
+from py_lib.engine.etl import (
+    find_latest_excel_file,
+    find_bp_files,
+    read_excel_file,
+    normalize_data,
+    get_daily_report_path,
+    save_backup,
+    save_processed_dataframe,
+)
+
+from py_lib.pipeline.processing import process_bp_file
+
+from py_lib.ui.interaction import (
+    clear_screen,
+    wait_for_user,
+    ask_yes_no,
+    ask_user_input,
+)
 
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
-def clear_screen():
-    """
-    Очистка экрана консоли
-    Использует системную команду 'cls' для Windows или 'clear' для Unix-подобных систем.
-    """
-    os.system('cls' if os.name == 'nt' else 'clear')
 
-
-def wait_for_user(prompt="\nНажмите Enter для продолжения..."):
+def is_valid_bp_number(
+    bp_value: str
+) -> bool:
     """
-    Ожидает нажатия клавиши Enter от пользователя.
+    Проверяет, что номер BP соответствует формату BP<YY><NNNNNN> и что
+    годовая часть (первые 2 цифры числа) >= 26.
+
+    Логика разбора:
+        - Отбрасываем префикс 'BP' (без учёта регистра).
+        - Оставшаяся часть должна быть числом длиной >= 2.
+        - Первые две цифры числа — это 'YY' (год).
+        - Валидно, если YY >= 26.
+
+    Примеры:
+        >>> is_valid_bp_number('BP27000822')  # YY='27' → True
+        True
+        >>> is_valid_bp_number('BP26000822')  # YY='26' → True
+        True
+        >>> is_valid_bp_number('BP25000822')  # YY='25' → False
+        False
+        >>> is_valid_bp_number('BP123')       # YY='12' → False
+        False
+        >>> is_valid_bp_number('BP')          # нет цифр → False
+        False
+        >>> is_valid_bp_number('-')           # мусор → False
+        False
 
     Аргументы:
-        prompt (str): Текст приглашения к вводу. По умолчанию содержит инструкцию.
+        bp_value (str): Номер BP из файла отчёта (например, 'BP26000822').
 
-    Обрабатывается:
-        - KeyboardInterrupt (Ctrl+C) - запрашивает подтверждение перед завершением
-        - EOFError - завершает программу при обнаружении конца ввода
-    """
-    while True:  # Цикл для повторной попытки ввода
-        try:
-            user_input = input(prompt)
-            return user_input  # Успешный ввод
-        except KeyboardInterrupt:
-            print()  # Переход на новую строку
-            while True:
-                confirm_word = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
-                if confirm_word == 'да':
-                    print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-                    sys.exit(0)
-                elif confirm_word == 'нет':
-                    print("\nПродолжаем работу...")
-                    break  # Выходим из внутреннего цикла и продолжаем внешний
-                else:
-                    print("Пожалуйста, введите 'да' или 'нет'")
-            # После break из внутреннего цикла, продолжаем внешний цикл
-            # То есть снова показываем prompt и ждём ввод
-            continue
-        except EOFError:
-            print("\n\nОбнаружен конец ввода. Программа завершена.")
-            sys.exit(0)
-
-
-def find_latest_breakpoint_file(file_prefix: str = 'breakpoint_data') -> Optional[str]:
-    """
-    Находит файл breakpoint_data с самой поздней датой в имени.
-    Функция ищет в текущей директории файлы, соответствующие шаблону:
-    ГГГГ-ММ-ДД_breakpoint_data.xlsx и возвращает самый свежий по дате.
-    
-    Аргументы:
-        file_prefix (str): Префикс имени файла для поиска.
-                           По умолчанию 'breakpoint_data'.
-    
     Возвращается:
-        Имя самого свежего файла или None, если файлы не найдены
+        bool: True, если номер валиден и его годовая часть >= 26.
     """
-    pattern = rf"[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}_{file_prefix}\.xlsx"
+    if not isinstance(bp_value, str):
+        return False
 
-    matching_files = []
+    value = bp_value.strip().upper()
+    if not value.startswith(BP_FILE_PREFIX):
+        return False
 
-    for filename in os.listdir('.'):
-        if re.match(pattern, filename):
-            # Извлекаем дату из имени файла
-            date_str = filename[:10]  # первые 10 символов = YYYY-MM-DD
-            try:
-                file_date = datetime.strptime(date_str, '%Y-%m-%d')
-                matching_files.append((file_date, filename))
-            except ValueError:
-                continue
+    digits = value[len(BP_FILE_PREFIX):]
+    if not digits.isdigit() or len(digits) < 2:
+        return False
 
-    if not matching_files:
-        return None
+    try:
+        year_prefix = int(digits[:2])
+    except (ValueError, TypeError):
+        return False
 
-    # Сортируем по дате и возвращаем самый свежий
-    matching_files.sort(key=lambda x: x[0], reverse=True)
-    latest_file = matching_files[0][1]
-
-    print(f"  Найден последний файл: {latest_file} (от {matching_files[0][0].strftime('%d.%m.%Y')})")
-    if len(matching_files) > 1:
-        print(f"  Всего найдено файлов с историей: {len(matching_files)}")
-
-    return latest_file
+    return year_prefix >= 26
 
 
-def normalize_breakpoint_data(df: pd.DataFrame) -> pd.DataFrame:
+def bp_report_check(
+    bp_report_dir: str = INPUT_BREAKPOINT_REPORT_DIR
+) -> set:
     """
-    Нормализует DataFrame:
-    - Числовые колонки (известный список) -> NaN/Inf заменяются на 0
-    - Колонки с датами -> строки ГГГГ-ММ-ДД, пустые -> '-'
-    - Все остальные колонки -> строки, пустые значения -> '-'
+    Поиск, чтение и аудит файла отчёта по техническим изменениям Breakpoint.
+
+    Логика:
+        1. Находим самый свежий файл отчёта в директории.
+        2. Читаем файл, оставляя только колонку 'BP No.' (BP_REPORT_COLS).
+        3. Извлекаем все значения номеров BP.
+        4. Оставляем только валидные номера (годовая часть >= 26).
+        5. Возвращаем множество номеров BP.
+
+    Аргументы:
+        bp_report_dir (str): Директория с файлами отчёта 'Breakpoint Report'.
+
+    Возвращается:
+        set: Множество валидных номеров BP (str).
     """
-    if df is None or df.empty:
-        return df
+    print("\n  [Аудит] Проверка входящего отчёта 'Breakpoint Report'...")
 
-    # Явный список числовых колонок (на основе ваших спецификаций)
-    numeric_columns = [
-        'Quantity', 'Quantity in SS', 'Quantity per Vehicle Before',
-        'Quantity per Vehicle After', 'Quantity per Box Before',
-        'Quantity per Box After', 'Quantity batches in SS'
-    ]
-    # Batches for old parts using out – строковая, НЕ включаем в numeric_columns
+    # 1. Поиск самого свежего файла отчёта
+    latest_report_file = find_latest_excel_file(
+        file_prefix=BP_REPORT_PREFIX,
+        file_path=bp_report_dir
+    )
+    if not latest_report_file:
+        print(f"  [Внимание] В папке '{bp_report_dir}' не найдено файлов 'Breakpoint Report'.")
+        return set()
 
-    # Колонки с датами (если встречаются)
-    datetime_columns = ['Change Date', 'New Part Available Date']
+    # 2. Чтение файла (только нужные колонки)
+    df_raw = read_excel_file(
+        filename=latest_report_file,
+        file_path=bp_report_dir,
+        cols=BP_REPORT_COLS
+    )
+    if df_raw is None or df_raw.empty:
+        return set()
 
-    df_norm = df.copy()
+    # 3. Нормализация: убираем мусор, NaN, None, пробелы
+    df_clean = normalize_data(df_raw)
 
-    # 1. Обработка числовых колонок
-    for col in numeric_columns:
-        if col in df_norm.columns:
-            # Преобразуем в числа (ошибки -> NaN)
-            df_norm[col] = pd.to_numeric(df_norm[col], errors='coerce')
-            # Замена Inf на 0
-            if np.isinf(df_norm[col]).any():
-                df_norm[col] = df_norm[col].replace([np.inf, -np.inf], 0)
-            # Замена NaN на 0
-            if df_norm[col].isna().any():
-                df_norm[col] = df_norm[col].fillna(0)
+    # 4. Проверка наличия ключевой колонки
+    col_bp = BP_REPORT_KEY_COL
+    if col_bp not in df_clean.columns:
+        print(f"  [Ошибка] В файле отчёта не найдена колонка '{col_bp}'.")
+        return set()
 
-    # 2. Обработка datetime колонок
-    for col in datetime_columns:
-        if col in df_norm.columns:
-            temp = pd.to_datetime(df_norm[col], errors='coerce')
-            df_norm[col] = temp.apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else '-')
+    # 5. Извлекаем все значения номеров BP
+    bp_series = df_clean[col_bp].astype(str)
 
-    # 3. Все остальные колонки (строковые)
-    for col in df_norm.columns:
-        if col in numeric_columns or col in datetime_columns:
-            continue
-        # Приводим к строке
-        df_norm[col] = df_norm[col].astype(str)
-        # Замена пустых вариантов на '-'
-        empty_mask = (
-            (df_norm[col].str.strip() == '') |
-            (df_norm[col].str.strip() == 'nan') |
-            (df_norm[col].str.strip() == 'None') |
-            (df_norm[col].str.strip() == 'NaT')
+    # 6. Фильтруем: оставляем только валидные номера (год >= 26)
+    set_bp: set = set()
+    invalid_count = 0
+
+    for bp_value in bp_series:
+        if is_valid_bp_number(bp_value):
+            set_bp.add(bp_value.strip().upper())
+        else:
+            # Учитываем только непустые строки, отличные от '-'
+            if bp_value and bp_value.strip() not in ('', '-'):
+                invalid_count += 1
+
+    print(f"  [Успех] Найдено {len(set_bp)} активных BP (год >= 26).")
+    if invalid_count > 0:
+        print(f"  [Информация] Отфильтровано невалидных значений: {invalid_count}.")
+
+    return set_bp
+
+
+def bp_data_check(
+    history_dir: str = INPUT_BREAKPOINT_DATA_DIR
+) -> set:
+    """
+    Поиск и чтение исторического файла базы данных breakpoint_data.xlsx.
+    Нормализует данные перед детекцией ключевой колонки.
+    """
+    print("\n  [Аудит] Проверка накопленной базы данных breakpoint_data...")
+
+    # 1. Поиск самого свежего файла истории
+    latest_db_file = find_latest_excel_file(file_prefix=BP_DATA_PREFIX, file_path=history_dir)
+    if not latest_db_file:
+        print("  [История] Историческая база данных отсутствует. Все найденные BP будут считаться новыми.")
+        return set()
+
+    # 2. Чтение файла
+    df_raw = read_excel_file(filename=latest_db_file, file_path=history_dir)
+    if df_raw is None or df_raw.empty:
+        return set()
+
+    # 3.  Нормализация: убираем мусор, NaN, None, пробелы
+    df_clean = normalize_data(df_raw)
+
+    # 4. Проверка наличия ключевой колонки (без детекции — имя фиксировано)
+    col_bp_no = BP_DATA_KEY_COL
+    if col_bp_no not in df_clean.columns:
+        print(f"  [Внимание] В файле истории не найдена колонка '{col_bp_no}'.")
+        return set()
+
+    # 5. Формирование множества существующих номеров
+    bp_no_series = df_clean[col_bp_no]
+    set_bp_no = {bp for bp in bp_no_series if bp and bp != '-'}
+
+    # 6. Проверка на пустой результат (файл есть, но валидных записей нет)
+    if not set_bp_no:
+        print(f"  [Информация] Файл истории существует, но не содержит валидных номеров BP "
+              f"в колонке '{col_bp_no}'. Все найденные BP будут считаться новыми.")
+        return set()
+
+    print(f"  [Внимание] В текущей базе данных уже содержатся записи по {len(set_bp_no)} уникальным BP.")
+    return set_bp_no
+
+
+def new_bp_check() -> Optional[set]:
+    """
+    Сверяет данные из входящего списка (breakpoint_report) и накопленной базы (breakpoint_data).
+    Вычисляет разность множеств и возвращает сет с номерами исключительно новых BP.
+    """
+    # Вызываем наши новые изолированные модули аудита
+    set_source_bp = bp_report_check()
+    set_existing_bp = bp_data_check()
+
+    # Находим разницу множеств: те, что есть в списке, но которых еще нет в базе
+    new_bp_set = set_source_bp - set_existing_bp
+
+    print("\n" + "=" * 60)
+    print("  РЕЗУЛЬТАТ СИНХРОНИЗАЦИИ И ПРОВЕРКИ НОВЫХ BP:")
+    print("=" * 60)
+    print(f"  • Всего BP во входящем списке (активных): {len(set_source_bp)}")
+    print(f"  • BP уже обработано и сохранено в базе:  {len(set_source_bp & set_existing_bp)}")
+    print(f"  • НОВЫЕ BP (требуют скачивания и работы): {len(new_bp_set)}")
+
+    if new_bp_set:
+        print("\n  Список новых BP для скачивания из G-BOM:")
+        for i, bp in enumerate(sorted(new_bp_set), 1):
+            print(f"    {i}. {bp}")
+    else:
+        print("\n  [Отлично] Все технические изменения из списка уже обработаны. Новых файлов не требуется.")
+
+    return new_bp_set
+
+
+def inject_bp_to_global_report(
+    df_bp_clean: pd.DataFrame,
+    bp_number: str
+) -> bool:
+    """
+    Выполняет безопасную инкрементальную дозапись одного обработанного DataFrame BP
+    в глобальный исторический файл breakpoint_data.xlsx.
+
+    Логика выбора источника истории (history_dir):
+        1. Если в OUTPUT_BREAKPOINT_DATA_ROOT уже существует файл текущей сессии
+           (YYYY-MM-DD_breakpoint_data.xlsx) — значит, предыдущие BP в этой сессии
+           уже сохранялись. Читаем историю из OUTPUT, чтобы не потерять их при
+           объединении.
+        2. Иначе (первый BP сессии) — читаем историю из INPUT_BREAKPOINT_DATA_DIR
+           (исходная база без новых BP).
+
+    Это обеспечивает корректное накопление данных в рамках одной сессии:
+    каждый следующий BP читает уже обновлённую базу из OUTPUT и добавляет к ней.
+
+    Аргументы:
+        df_bp_clean (pd.DataFrame): Обработанный DataFrame одного BP.
+        bp_number (str):            Номер BP (для сообщений).
+
+    Возвращается:
+        bool: True при успешной записи, False при ошибке.
+    """
+    try:
+        # Определяем, откуда читать историю для объединения.
+        output_history_file = get_daily_report_path(
+            file_prefix=BP_DATA_PREFIX,
+            output_dir=OUTPUT_BREAKPOINT_DATA_ROOT,
         )
-        if empty_mask.any():
-            df_norm.loc[empty_mask, col] = '-'
 
-    return df_norm
-
-
-def load_breakpoint_data(file_prefix: str = 'breakpoint_data') -> Optional[pd.DataFrame]:
-    """
-    Загружает самый свежий файл breakpoint_data с датой в имени.
-
-    Ожидаемая структура файла:
-        - строка 0: объединённая ячейка "ДЛЯ КЛАДОВЩИКОВ"
-        - строка 1: английские заголовки колонок
-        - строка 2: русские переводы заголовков
-        - строки 3+: данные
-
-    При загрузке используем английские заголовки как имена колонок (header=1),
-    а строку с русскими переводами удаляем из данных.
-
-    Аргументы:
-        file_prefix (str): Префикс имени файла для поиска.
-
-    Возвращается:
-        Optional[pd.DataFrame]: DataFrame с данными или None.
-    """
-    latest_file = find_latest_breakpoint_file(file_prefix)
-
-    if latest_file is None:
-        print("  Внимание: Не найдено ни одного файла breakpoint_data с историей")
-        print("  Будет создан новый файл")
-        return None
-
-    try:
-        # Загружаем, используя вторую строку (индекс 1) как заголовки (английские)
-        df = pd.read_excel(latest_file, sheet_name='pivot', header=1)
-        print(f"  Файл '{latest_file}' загружен успешно")
-
-        # В загруженном DataFrame первая строка данных (индекс 0) — это русские переводы.
-        # Удаляем её, так как она не является реальными данными.
-        if not df.empty:
-            df = df.iloc[1:].reset_index(drop=True)
-            print("  Строка с русскими переводами заголовков удалена из данных")
+        if os.path.exists(output_history_file):
+            # Предыдущий BP текущей сессии уже сохранён — читаем из OUTPUT,
+            # чтобы не потерять его строки при следующем объединении.
+            history_dir = OUTPUT_BREAKPOINT_DATA_ROOT
         else:
-            print("  Внимание: Файл не содержит данных после заголовков")
-            return None
+            # Первый BP сессии — читаем исходную базу из INPUT.
+            history_dir = INPUT_BREAKPOINT_DATA_DIR
 
-        print(f"  Загружено {len(df)} строк данных")
+        export_path = save_processed_dataframe(
+            df_new_data=df_bp_clean,
+            file_prefix=BP_DATA_PREFIX,
+            column_translation=BP_DATA_TRANSLATION_COLS,
+            int_columns=BP_DATA_INT_COLS,
+            datetime_columns=BP_DATA_DATETIME_COLS,
+            history_dir=history_dir,
+            output_dir=OUTPUT_BREAKPOINT_DATA_ROOT,
+        )
 
-        # Приводим данные к требуемым типам
-        print("\n  Выполняется нормализация данных...")
-        df = normalize_breakpoint_data(df)
+        if export_path == "STRUCTURE_MISMATCH":
+            print(f"  [Ошибка записи] Структура колонок файла {bp_number} нарушает формат базы данных!")
+            return False
+        elif export_path:
+            return True
 
-        return df
-
-    except FileNotFoundError:
-        print(f"  Ошибка: Файл '{latest_file}' не найден")
-        print("  Будет создан новый файл")
-        return None
-    except PermissionError:
-        print(f"  Ошибка: Нет прав для чтения файла '{latest_file}'")
-        print("  Закройте файл, если он открыт в Excel, и попробуйте снова.")
-        print("  Будет создан новый файл")
-        return None
-    except EmptyDataError:
-        print(f"  Ошибка: Файл '{latest_file}' пуст")
-        print("  Будет создан новый файл")
-        return None
-    except ParserError as e:
-        print(f"  Ошибка: Файл '{latest_file}' повреждён или имеет неверный формат: {e}")
-        print("  Будет создан новый файл")
-        return None
-    except InvalidFileException:
-        print(f"  Ошибка: Файл '{latest_file}' не является корректным Excel файлом")
-        print("  Будет создан новый файл")
-        return None
-    except ValueError as e:
-        if "Excel file format cannot be determined" in str(e):
-            print(f"  Ошибка: Не удалось определить формат файла '{latest_file}'")
-            print("  Убедитесь, что файл имеет расширение .xlsx или .xls")
-        else:
-            print(f"  Ошибка при загрузке файла '{latest_file}': {e}")
-        print("  Будет создан новый файл")
-        return None
-    except Exception as e:
-        print(f"  НЕПРЕДВИДЕННАЯ ОШИБКА при загрузке файла '{latest_file}': {e}")
-        print(f"  Тип ошибки: {type(e).__name__}")
-        print("  Будет создан новый файл")
-        return None
-
-
-def save_excel_with_formatting(
-        df_new_data: pd.DataFrame,
-        output_filename: str,
-        sheet_name: str = 'pivot',
-        russian_headers: Optional[List[str]] = None
-    ) -> bool:
-    """
-    Сохраняет DataFrame в Excel с форматированием и тремя строками заголовков.
-
-    Структура выходного файла:
-        - Строка 0: объединённые ячейки "ДЛЯ КЛАДОВЩИКОВ" (стиль merged_cell_format)
-        - Строка 1: английские имена колонок (из df_new_data.columns) со стилем header_format
-        - Строка 2: русские переводы заголовков (если переданы) со стилем header_format
-        - Строка 3 и далее: строки данных с форматированием в зависимости от колонки
-
-    Аргументы:
-        df_new_data (pd.DataFrame): DataFrame с данными (без строк заголовков)
-        output_filename (str): Имя выходного файла
-        sheet_name (str): Имя листа в Excel. По умолчанию 'pivot'
-        russian_headers (Optional[List[str]]): Список русских переводов для второй строки.
-            Должен соответствовать длине df_new_data.columns. Если None, вторая строка
-            остаётся пустой.
-
-    Возвращается:
-        bool: True если сохранение успешно, False при ошибке
-    """
-    # Защита от любых NaN/Inf (на всякий случай)
-    df_new_data = df_new_data.replace([np.nan, np.inf, -np.inf], 0)
-
-    try:
-        with pd.ExcelWriter(output_filename, engine='xlsxwriter') as writer:
-            workbook = writer.book
-            worksheet = workbook.add_worksheet(sheet_name)
-
-            # Формат для объединённых ячеек "ДЛЯ КЛАДОВЩИКОВ" (фон #FDE9D9)
-            warehouse_merged_format = workbook.add_format({
-                'font_name': 'Arial', 'font_size': 10, 'bold': True,
-                'font_color': 'black', 'bg_color': '#FDE9D9',
-                'valign': 'vcenter', 'align': 'center', 'text_wrap': True, 'border': 1
-            })
-
-            header_format = workbook.add_format({
-                'font_name': 'Arial', 'font_size': 10, 'bold': True,
-                'font_color': 'white', 'bg_color': '#0F243E',
-                'valign': 'center', 'align': 'center', 'text_wrap': True, 'border': 1
-            })
-
-            data_format = workbook.add_format({
-                'font_name': 'Arial', 'font_size': 10, 'font_color': 'black',
-                'bg_color': '#FFFFFF', 'valign': 'top'
-            })
-
-            columns_e_p_format = workbook.add_format({
-                'font_name': 'Arial', 'font_size': 10, 'font_color': 'black',
-                'bg_color': '#FDE9D9', 'valign': 'top'
-            })
-
-            columns_ac_ad_format = workbook.add_format({
-                'font_name': 'Arial', 'font_size': 10, 'font_color': 'black',
-                'bg_color': '#FDE9D9', 'valign': 'top'
-            })
-
-            wrap_format = workbook.add_format({
-                'font_name': 'Arial', 'font_size': 10, 'font_color': 'black',
-                'bg_color': '#FFFFFF', 'text_wrap': True, 'valign': 'top'
-            })
-
-            wrap_e_p_format = workbook.add_format({
-                'font_name': 'Arial', 'font_size': 10, 'font_color': 'black',
-                'bg_color': '#FDE9D9', 'text_wrap': True, 'valign': 'top'
-            })
-
-            wrap_ac_ad_format = workbook.add_format({
-                'font_name': 'Arial', 'font_size': 10, 'font_color': 'black',
-                'bg_color': '#FDE9D9', 'text_wrap': True, 'valign': 'top'
-            })
-
-            columns_wrap_format = workbook.add_format({
-                'font_name': 'Arial', 'font_size': 10, 'font_color': 'black',
-                'bg_color': '#FFFFFF', 'text_wrap': True, 'valign': 'top'
-            })
-
-            # Ширина колонок
-            column_widths = {
-                0: 25, 1: 25, 2: 25, 3: 25, 4: 25, 5: 25, 6: 25, 7: 25,
-                8: 80, 9: 25, 10: 25, 11: 25, 12: 25, 13: 25, 14: 25,
-                15: 80, 16: 30, 17: 50, 18: 30, 19: 50,
-                20: 30, 21: 30, 22: 30, 23: 30, 24: 30, 25: 30, 26: 30, 27: 30,
-                28: 50, 29: 50, 30: 80, 31: 25, 32: 80, 33: 25,
-                34: 100, 35: 100, 36: 25, 37: 25, 38: 100,
-            }
-            for col_num, width in column_widths.items():
-                if col_num < len(df_new_data.columns):
-                    worksheet.set_column(col_num, col_num, width)
-
-            columns_e_p_indices = list(range(4, 16))
-            columns_ac_ad_indices = [28, 29]
-            columns_wrap_indices = [34, 35, 38]
-
-            # === СТРОКА 0: объединённые ячейки ===
-            if len(df_new_data.columns) > 15:
-                worksheet.merge_range(0, 4, 0, 15, "ДЛЯ КЛАДОВЩИКОВ", warehouse_merged_format)
-            if len(df_new_data.columns) > 29:
-                worksheet.merge_range(0, 28, 0, 29, "ДЛЯ КЛАДОВЩИКОВ", warehouse_merged_format)
-
-            # Остальные ячейки строки 0 оставляем пустыми (стиль merged_cell_format)
-            for col_num in range(len(df_new_data.columns)):
-                if col_num in range(4, 16) or col_num in [28, 29]:
-                    continue
-                worksheet.write(0, col_num, '')
-
-            # === СТРОКА 1: английские заголовки ===
-            for col_num, header in enumerate(df_new_data.columns):
-                worksheet.write(1, col_num, header, header_format)
-
-            # === СТРОКА 2: русские заголовки ===
-            if russian_headers is not None and len(russian_headers) == len(df_new_data.columns):
-                for col_num, rus_header in enumerate(russian_headers):
-                    worksheet.write(2, col_num, rus_header, header_format)
-            else:
-                # Если русские заголовки не переданы, оставляем строку пустой
-                for col_num in range(len(df_new_data.columns)):
-                    worksheet.write(2, col_num, '', header_format)
-
-            # === ДАННЫЕ (начиная со строки 3) ===
-            for row_num in range(len(df_new_data)):
-                for col_num in range(len(df_new_data.columns)):
-                    value = df_new_data.iloc[row_num, col_num]
-                    is_long_text = isinstance(value, str) and len(value) > 50
-                    excel_row = row_num + 3  # Данные начинаются с 3-й строки Excel
-
-                    if col_num in columns_wrap_indices:
-                        worksheet.write(excel_row, col_num, value, columns_wrap_format)
-                    elif col_num in columns_e_p_indices:
-                        if is_long_text:
-                            worksheet.write(excel_row, col_num, value, wrap_e_p_format)
-                        else:
-                            worksheet.write(excel_row, col_num, value, columns_e_p_format)
-                    elif col_num in columns_ac_ad_indices:
-                        if is_long_text:
-                            worksheet.write(excel_row, col_num, value, wrap_ac_ad_format)
-                        else:
-                            worksheet.write(excel_row, col_num, value, columns_ac_ad_format)
-                    else:
-                        if is_long_text:
-                            worksheet.write(excel_row, col_num, value, wrap_format)
-                        else:
-                            worksheet.write(excel_row, col_num, value, data_format)
-
-        print(f"  Файл '{output_filename}' сохранён с форматированием (три строки заголовков)")
-        return True
-
-    except ImportError as e:
-        print(f"  Ошибка импорта xlsxwriter: {e}")
-        print("  Установите xlsxwriter: pip install xlsxwriter")
-        print("  Сохраняем без форматирования...")
-        df_new_data.to_excel(output_filename, index=False)
-        return False
-    except PermissionError:
-        print(f"  Ошибка: Нет прав для записи в файл '{output_filename}'")
-        print("  Закройте файл, если он открыт в Excel, и попробуйте снова.")
         return False
     except Exception as e:
-        print(f"  Ошибка при сохранении с форматированием: {e}")
-        print("  Сохраняем без форматирования...")
-        df_new_data.to_excel(output_filename, index=False)
+        print(f"  [Системный сбой] Ошибка при попытке транзакционной записи {bp_number} на диск: {e}")
         return False
-
-
-def save_processed_dataframe(
-        df_new_data: pd.DataFrame,
-        file_prefix: str = 'breakpoint_data'
-    ) -> Optional[str]:
-    """
-    Сохраняет обработанный DataFrame с объединением с существующими данными.
-
-    Аргументы:
-        df_new_data (pd.DataFrame): Новый DataFrame для сохранения (только данные, без строки переводов).
-        file_prefix (str): Префикс имени файла.
-
-    Возвращается:
-        Optional[str]: Имя сохранённого файла или None при ошибке.
-    """
-    # Список русских переводов колонок (должен соответствовать порядку колонок в df_new_data)
-    column_translation = [
-        'Номер переключения', 'Статус переключения', 'Партия по плану', 'Дата выхода новой детали',
-        'Партия по факту', 'Дата переключения', 'Модель', 'Номер "старой" детали до переключения',
-        'Название "старой" детали до переключения',
-        'Количество "старых" деталей до переключения на Safety Stock',
-        'Количество партий со "старыми" деталями до переключения',
-        'Конфигурация для использования остатка "старых" деталей',
-        'Партии для использования остатка "старых" деталей',
-        'Привод (трансмиссия)', 'Номер "новой" детали после переключения',
-        'Название "новой" детали после переключения',
-        'Код производственной линии "старой" детали до переключения',
-        'Название производственной линии "старой" детали до переключения',
-        'Код производственной линии "новой" детали после переключения',
-        'Название производственной линии "новой" детали после переключения',
-        'Количество "старых" деталей до переключения на 1 авто',
-        'Количество "новых" деталей после переключения на 1 авто',
-        'Количество "старых" деталей до переключения на 1 ящик',
-        'Количество "новых" деталей после переключения на 1 ящик',
-        'Размеры ящика (Д-Ш-В) до переключения',
-        'Размеры ящика (Д-Ш-В) после переключения',
-        'Размеры поддона (Д-Ш-В) до переключения',
-        'Размеры поддона (Д-Ш-В) после переключения',
-        'Использование "старых" деталей до переключения в производстве',
-        'Взаимозаменяемость "старых/новых" деталей до/после переключения',
-        'Название поставщика до переключения', 'Локализация до переключения',
-        'Название поставщика после переключения', 'Локализация после переключения',
-        'Описание переключения', 'Решение переключения', 'Код цвета',
-        'Название цвета', 'Комментарии',
-    ]
-
-    # Загружаем существующий файл
-    df_existing = load_breakpoint_data(file_prefix)
-
-    # Объединяем данные
-    if df_existing is not None and not df_existing.empty:
-        print(f"  Объединение: {len(df_existing)} существующих строк + {len(df_new_data)} новых строк")
-
-        # Проверяем совпадение колонок
-        if list(df_existing.columns) != list(df_new_data.columns):
-            print("  ВНИМАНИЕ: Структура колонок не совпадает!")
-            while True:
-                try:
-                    proceed = input("  Продолжить объединение? (да/нет): ").strip().lower()
-                    if proceed in ('да', 'нет'):
-                        break
-                    print("  Некорректный ввод. Пожалуйста, введите 'да' или 'нет'.")
-                except KeyboardInterrupt:
-                    print()
-                    while True:
-                        try:
-                            confirm_word = input("\nВы действительно хотите прекратить работу программы (да/нет): ").strip().lower()
-                            if confirm_word == 'да':
-                                print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-                                sys.exit(0)
-                            elif confirm_word == 'нет':
-                                print("\nПродолжаем работу...")
-                                break
-                            else:
-                                print("Пожалуйста, введите 'да' или 'нет'")
-                        except KeyboardInterrupt:
-                            print("\n\nПрограмма прервана пользователем (Ctrl+C)")
-                            sys.exit(0)
-                    continue
-
-            if proceed != 'да':
-                print("  Объединение отменено. Новые данные будут сохранены в отдельный файл.")
-                current_date = datetime.now().strftime('%Y-%m-%d')
-                filename = f"{current_date}_{file_prefix}_new.xlsx"
-                success = save_excel_with_formatting(df_new_data, filename, russian_headers=column_translation)
-                return filename if success else None
-
-        df_combined = pd.concat([df_existing, df_new_data], ignore_index=True)
-        print(f"  Итого строк после объединения: {len(df_combined)}")
-
-    else:
-        df_combined = df_new_data
-        print(f"  Создаётся новый файл с {len(df_combined)} строками")
-
-    # Нормализуем объединенные даные
-    print("\n  Выполняется нормализация объединённых данных...")
-    df_combined = normalize_breakpoint_data(df_combined)
-
-    current_date = datetime.now().strftime('%Y-%m-%d')
-    filename = f"{current_date}_{file_prefix}.xlsx"
-    print(f"\n  Сохранение файла: {filename}")
-    success = save_excel_with_formatting(df_combined, filename, russian_headers=column_translation)
-
-    if success:
-        print(f"\n  Файл успешно сохранён: {filename}")
-        return filename
-    else:
-        print("\n  Ошибка при сохранении файла!")
-        return None
 
 
 def main():
     """
-    Главная функция приложения Breakpoint Refactoring Tool.
+    Главная управляющая функция модуля bp_refactoring.
+    Оркестрирует аудит входящих файлов, валидацию и запуск конвейера обработки.
 
-    Выполняет пошаговый процесс обработки технических изменений:
+    Этапы оркестрации:
+        ЭТАП 1: ПРОВЕРКА НОВЫХ НОМЕРОВ ТЕХНИЧЕСКИХ ИЗМЕНЕНИЙ (BP<номер>)
+        ЭТАП 2: ПРОВЕРКА НАЛИЧИЯ BP ФАЙЛОВ (BP<номер>.xlsx)
+        ЭТАП 3: ПОТОКОВАЯ ОБРАБОТКА BP И СОХРАНЕНИЕ (YYYY-mm-dd_breakpoint_data.xlsx)
+        ЭТАП 4: ИТОГИ
 
-    Этапы выполнения:
-        1. Отображение информации о программе и инструкций для пользователя
-        2. Ожидание подтверждения пользователя для начала работы
-        3. Запуск обработки BP файлов через bp_refactoring.main()
-        4. Формирование итоговой сводной таблицы через bp_summary.main()
-        5. Сохранение результата в Excel файл с форматированием
-
-    Требования к окружению:
-        - Наличие следующих файлов в рабочей папке:
-            - bp_list_2025-2026.xlsx
-            - bom.xlsx
-            - configuration.xlsx
-            - Упаковочный_лист_<партия>.xlsx
-            - BP*.xlsx (файлы технических изменений)
-
-    Returns:
-        None - при успешном выполнении программа завершается с кодом 0,
-               при ошибках - с кодом 1.
-
-    Исключения:
-        KeyboardInterrupt: обрабатывается корректно с завершением программы
-        Exception: перехватывается, выводится traceback и код возврата 1
     """
-    # НАЧАЛО ЗАМЕРА ОБЩЕГО ВРЕМЕНИ ПРОГРАММЫ
-    program_start_time = time.time()
-
     clear_screen()
 
-    print("""
-        ╔══════════════════════════════════════════════════════════════╗
-        ║               BREAKPOINT REFACTORING TOOL V1.0               ║
-        ║                          ----------                          ║
-        ║      ПРИЛОЖЕНИЕ ДЛЯ ОБРАБОТКИ ТЕХНИЧЕСКИХ ИЗМЕНЕНИЙ V1.0     ║
-        ╚══════════════════════════════════════════════════════════════╝
-        """)
-
-    print("\nИнструкция:")
-    print("   1. Программа предназначена для обработки технических изменений - Breakpoint (BP)")
-    print("   2. Программа разделена на 3 этапа:")
-    print("      2.1. Пошаговая обработка Excel файлов BP")
-    print("      2.2. Пошаговое формирование итоговой таблицы")
-    print("           • Разделение деталей по парам 'До / После изменения'")
-    print("      2.3. Сохранение итоговой таблицы в Excel файл 'ГГГГ-ММ-ДД_breakpoint_data.xlsx'")
-    print("   3. Перед обрабаткой программа проверит имеются ли BP для скачивания из системы G-BOM")
-    print("   4. Программа будет обрабатывать Excel файлы по одному")
-    print("   5. Четко следуйте указаниям программы на каждом шаге")
-    print("   6. После каждого шага Вам предоставляется возможность проверить внесенные изменения:")
-    print("      6.1. Если внесенные изменения корректны, нажмите Enter")
-    print("      6.2. Если внесенные изменения некорректны, введите 'retry'")
-    print("      6.3. 'retry' отменит внесенные изменения и Вы сможете исправить неточность")
-    print("      6.4. После исправления нажмите Enter")
-    print("      6.5. Нажмите Enter, чтобы пропустить шаг и оставить его без изменений")
-    print("   7. Нажмите клавиши Ctrl+C, чтобы прервать работу программы")
-    print("\nТРЕБОВАНИЯ:")
-    print("   1. Пользователь должен иметь доступ к системе G-BOM")
-    print("      • Если у Вас нет доступа к системе G-BOM, обратитесь в PLD/ED:")
-    print("         → Бариков Владимир / Barikov Vladimir")
-    print("         → Ермолаева Майя / Ermolaeva Maya")
-    print("   2. Пользователь должен иметь доступ к системе SCM")
-    print("      • Если у Вас нет доступа к системе SCM, обратитесь в PLD/WL:")
-    print("         → Федин Антон / Fedin Anton")
-    print("   3. Пользователь должен иметь доступ к мессенджеру DingTalk")
-    print("      • Информация по Breakpoint рассылается в 2 чатах DingTalk:")
-    print("         → Break Point (BP) - админ: Алексеева Елизавета / Alekseeva Elizaveta (MD/PM)")
-    print("         → Breakpoint PLD Info - админ: Бариков Владимир / Barikov Vladimir (PLD/ED)")
-    print(f"   4. Все Excel файлы должны находится в рабочей папке → {os.getcwd()}")
-    print("      • Список необходимых файлов для корректной работы программы:")
-    print("         → 'ГГГГ-ММ-ДД_breakpoint_data.xlsx'")
-    print("         → 'bp_list_2025-2026.xlsx'")
-    print("         → 'bom.xlsx'")
-    print("         → 'configuration.xlsx'")
-    print("         → 'BP<номер>.xlsx'")
-    print("         → 'packing_list_<партия>.xlsx'")
-    print("\n\n***В случае некорректной работы программы обращаться к разработчику:")
-    print("      • В мессенджере DingTalk:")
-    print("         → Бариков Владимир / Barikov Vladimir (PLD/ED)")
-
-    wait_for_user()
+    # НАЧАЛО ЗАМЕРА ОБЩЕГО ВРЕМЕНИ ПРОГРАММЫ
+    program_start_time = time.time()
 
     print("=" * 70)
     print("ЗАПУСК BP REFACTORING TOOL")
     print("=" * 70)
 
-    # Шаг 1: Обработка BP файлов
-    print("\n[1] Обработка BP файлов...")
-    bp_processing_start = time.time()
-    processed_results = processing_main()
-    bp_processing_time = time.time() - bp_processing_start
+    print("""
+            ╔══════════════════════════════════════════════════════════════╗
+            ║               BREAKPOINT REFACTORING TOOL V2.0               ║
+            ║                          ----------                          ║
+            ║      ПРИЛОЖЕНИЕ ДЛЯ ОБРАБОТКИ ТЕХНИЧЕСКИХ ИЗМЕНЕНИЙ V2.0     ║
+            ╚══════════════════════════════════════════════════════════════╝
+            """)
 
-    if not isinstance(processed_results, dict) or len(processed_results) == 0:
-        print("\nОшибка: Не обработано ни одного BP файла!")
+    print("\nИнструкция:")
+    print("   1. Программа предназначена для обработки технических изменений - Breakpoint (BP)")
+    print("   2. Программа разделена на 4 этапа:")
+    print("      ЭТАП 1: ПРОВЕРКА НОВЫХ НОМЕРОВ ТЕХНИЧЕСКИХ ИЗМЕНЕНИЙ (BP<номер>)")
+    print("      ЭТАП 2: ПРОВЕРКА НАЛИЧИЯ BP ФАЙЛОВ (BP<номер>.xlsx)")
+    print("      ЭТАП 3: ПОТОКОВАЯ ОБРАБОТКА BP И СОХРАНЕНИЕ (YYYY-mm-dd_breakpoint_data.xlsx)")
+    print("      ЭТАП 4: ИТОГИ")
+    print("   3. Четко следуйте указаниям программы на каждом этапе")
+    print("   4. Вам предоставляется возможность проверить внесенные изменения:")
+    print("      • Если внесенные изменения корректны, нажмите Enter")
+    print("      • Если внесенные изменения некорректны, введите 'retry'")
+    print("      • 'retry' отменит внесенные изменения и Вы сможете исправить неточность")
+    print("      • После исправления нажмите Enter")
+    print("      • Нажмите Enter, чтобы пропустить шаг и оставить его без изменений")
+    print("   5. Программа будет обрабатывать BP файлы по одному")
+    print("   6. Автосохранение:")
+    print("      • Программа будет сохранять каждый обработанный BP в YYYY-mm-dd_breakpoint_data.xlsx")
+    print("      • Программа будет сохранять бэкап в директорию 'output_backup_files' после обработки каждого BP")
+    print("   7. Нажмите клавиши Ctrl+C, чтобы экстренно прервать работу программы")
+    print("\nТРЕБОВАНИЯ:")
+    print("   1. Пользователь должен иметь доступ к системе G-BOM")
+    print("      • Если у Вас нет доступа к системе G-BOM, обратитесь в PLD/ED:")
+    print("         → Ермолаева Майя / Ermolaeva Maya")
+    print("   2. Пользователь должен иметь доступ к системе SCM")
+    print("      • Если у Вас нет доступа к системе SCM, обратитесь в PLD/WL:")
+    print("         → Федин Антон / Fedin Anton")
+    print("   3. Пользователь должен иметь доступ к мессенджеру rLink")
+    print("      • Информация по Breakpoint рассылается в 2 чатах rLink:")
+    print("         → Break Points - админ: Бровкина Софья / Brovkina Sofya (MD/PM)")
+    print("         → Breakpoint PLD Info - админ: Ермолаева Майя / Ermolaeva Maya (PLD/ED)")
+    print(f"   4. Все Excel файлы должны находится в рабочей папке → {os.getcwd()}")
+    print("      • Структура для корректной работы программы:")
+    print("""
+                .
+                ├── BREAKPOINT_REFACTORING_TOOL_V2.0.exe
+                ├── input_files
+                │   ├── input_breakpoint_data_files
+                │   │   └── YYYY-mm-dd_breakpoint_data.xlsx
+                │   ├── input_breakpoint_files
+                │   │   └── BP<номер>.xlsx
+                │   ├── input_breakpoint_report_files
+                │   │   └── YYYY-mm-dd_breakpoint_report.xlsx
+                │   ├── input_configuration_files
+                │   │   └── YYYY-mm-dd_configuration.xlsx
+                │   └── input_packing_list_files
+                │       └── Упаковочный лист партия <номер>.xlsx
+                └──output_files
+                    ├── output_backup_files
+                    │   └──BP<номер>
+                    │      └── BP<номер>.xlsx
+                    └── output_breakpoint_data_files
+                        └── YYYY-mm-dd_breakpoint_report.xlsx
+        """)
+    print("\n\n***В случае некорректной работы программы обращаться к разработчику:")
+    print("      • В мессенджере rLink:")
+    print("         → Бариков Владимир / Barikov Vladimir (PLD/ED)")
+
+    wait_for_user()
+
+    print("""
+        ╔══════════════════════════════════════════════════════════════╗
+        ║                                                              ║
+        ║              ПОШАГОВАЯ ОБРАБОТКА EXCEL ФАЙЛОВ BP             ║
+        ║                                                              ║
+        ╚══════════════════════════════════════════════════════════════╝
+        """)
+
+    print("\nБудут обработаны следующие шаги для каждого BP файла:")
+
+    for i, description in enumerate(BP_STEP_DESCRIPTIONS, 1):
+        print(f"   ШАГ {i:>2}: {description}")
+
+    wait_for_user()
+
+
+    # =============================================================================
+    # ЭТАП 1: ПРОВЕРКА НОВЫХ НОМЕРОВ ТЕХНИЧЕСКИХ ИЗМЕНЕНИЙ (BREAKPOINT -> BP)
+    # =============================================================================
+    print("\n" + "=" * 60)
+    print("ЭТАП 1: ПРОВЕРКА НОВЫХ НОМЕРОВ ТЕХНИЧЕСКИХ ИЗМЕНЕНИЙ (BREAKPOINT -> BP)")
+    print("=" * 60)
+
+    # Запускаем аудит
+    new_bp_set = new_bp_check()
+
+    # Предохранитель на случай технического сбоя (если функция вернула None)
+    if new_bp_set is None:
+        print("\n  [Критическая ошибка] Сбой при синхронизации и проверке новых BP. Продолжение невозможно.")
+        wait_for_user()
         sys.exit(1)
 
-    # Выводим время обработки BP
-    print(f"\n  [ВРЕМЯ ОБРАБОТКИ BP ФАЙЛОВ: {timedelta(seconds=int(bp_processing_time))}]")
-    print(f"  ({(bp_processing_time/60):.1f} минут)")
+    # Формируем список файлов для автоматической обработки
+    auto_bp_files = [f"{bp}.xlsx" for bp in new_bp_set]
+    bp_target_dir = INPUT_BREAKPOINT_FILES_DIR
 
-    # Собираем времена обработки из processed_results
-    bp_times = {}
-    for bp_num, data in processed_results.items():
-        if isinstance(data, dict) and 'processing_time_seconds' in data:
-            bp_times[bp_num] = data['processing_time_seconds']
-            # Извлекаем DataFrame из словаря, если он там
-            if 'dataframe' in data:
-                processed_results[bp_num] = data['dataframe']
+    # Развилка логики интерфейса
+    if auto_bp_files:
+        # Новые BP обнаружены
+        print("\n" + "!" * 60)
+        print("  [ВНИМАНИЕ]: Обнаружены новые BP, которые отсутствуют в вашей базе данных!")
+        print("!" * 60)
+        print("\n  Пожалуйста, выполните следующие действия:")
+        print("    1. Скачайте из системы G-BOM необходимые Excel-файлы изменений.")
+        print(f"    2. Поместите скачанные файлы в папку проекта: '{bp_target_dir}'")
+        print("    3. Убедитесь, что файлы имеют строгое имя формата: BP<номер>.xlsx")
+        print("\n  Программа приостановлена. Вы можете скопировать файлы прямо сейчас.")
 
-    # Выводим детальное время по каждому BP из bp_processing
-    if bp_times:
-        print("\n  [ДЕТАЛЬНОЕ ВРЕМЯ ОБРАБОТКИ КАЖДОГО BP В МОДУЛЕ bp_processing]:")
-        for bp_num, bp_time in bp_times.items():
-            print(f"    • {bp_num}: {timedelta(seconds=int(bp_time))} ({(bp_time/60):.1f} мин)")
-
-    # Шаг 2: Формирование итоговой таблицы
-    print("\n[2] Формирование итоговой таблицы...")
-    summary_start = time.time()
-    summary_df = summary_main(processed_results)
-    summary_time = time.time() - summary_start
-
-    if summary_df is None or summary_df.empty:
-        print("\nОшибка: Не удалось сформировать итоговую таблицу!")
-        sys.exit(1)
-
-    print(f"\n  [ВРЕМЯ ФОРМИРОВАНИЯ ИТОГОВОЙ ТАБЛИЦЫ: {timedelta(seconds=int(summary_time))}]")
-    print(f"  ({(summary_time/60):.1f} минут)")
-
-    # Шаг 3: Сохранение результата
-    print("\n[3] Сохранение результата...")
-    save_start = time.time()
-    saved_file = save_processed_dataframe(summary_df, 'breakpoint_data')
-    save_time = time.time() - save_start
-
-    if saved_file:
-        print(f"\n  Готово! Файл: {saved_file}")
+        wait_for_user(f"\n  Поместите файлы в '{bp_target_dir}' и нажмите Enter для продолжения...")
     else:
-        print("\n  Ошибка при сохранении!")
-        sys.exit(1)
+        # Новых BP нет
+        print("\n" + "─" * 60)
+        print("  [Синхронизация] Новых технических изменений в системе G-BOM не обнаружено.")
+        print("  Ваша локальная база данных находится в полностью актуальном состоянии!")
+        print("─" * 60)
+        wait_for_user()
 
-    # ИТОГОВОЕ ВРЕМЯ ПРОГРАММЫ
-    total_program_time = time.time() - program_start_time
+    # Ручной ввод BP номеров
+    print("\n" + "=" * 60)
+    print("Дополнительный ручной ввод BP номеров (ОПЦИОНАЛЬНО)")
+    print("=" * 60)
 
-    print("\n" + "=" * 70)
-    print("ИТОГОВАЯ СТАТИСТИКА ВРЕМЕНИ")
-    print("=" * 70)
-    print(f"  Общее время работы программы: {timedelta(seconds=int(total_program_time))}")
-    print(f"  ({(total_program_time/60):.1f} минут)")
-    print("-" * 70)
-    print(f"  Время обработки BP файлов:      {timedelta(seconds=int(bp_processing_time))} ({(bp_processing_time/60):.1f} мин)")
-    print(f"  Время формирования сводной:     {timedelta(seconds=int(summary_time))} ({(summary_time/60):.1f} мин)")
-    print(f"  Время сохранения результата:    {timedelta(seconds=int(save_time))} ({(save_time/60):.1f} мин)")
-    print("=" * 70)
+    if auto_bp_files:
+        print(f"\n  Система автоматически запланировала к обработке {len(auto_bp_files)} BP.")
+        prompt_msg = "  Хотите добавить дополнительные номера BP для обработки вручную?"
+    else:
+        print("\n  Поскольку новых автоматических изменений нет, конвейер пуст.")
+        prompt_msg = "  Хотите указать номер конкретного файла BP для принудительной ручной обработки?"
 
-    if bp_times:
-        print("\n  Время обработки каждого BP в модуле bp_processing:")
-        for bp_num, bp_time in bp_times.items():
-            print(f"    {bp_num}: {timedelta(seconds=int(bp_time))} ({(bp_time/60):.1f} мин)")
+    manual_bp_files = []
 
-    print(f"\n  Готово! Файл: {saved_file}")
+    # Запрашиваем у пользователя решение через универсальный UI-компонент
+    if ask_yes_no(prompt_msg, default_yes=False):
+        print("\n  ИНСТРУКЦИЯ ПО РУЧНОМУ ДОБАВЛЕНИЮ:")
+        print("    • Вводите номера в формате: BP<номер> (например: BP26002813)")
+        print("    • После каждого номера нажимайте Enter для добавления в очередь")
+        print("    • Для завершения ввода оставьте строку пустой и просто нажмите Enter")
+        print("-" * 60)
+
+        while True:
+            bp_input = input("\n  Введите номер BP (или Enter для завершения): ").strip().upper()
+
+            if bp_input == '':
+                break
+
+            # Ручной ввод допускает BP с любым годом (включая < 26) — это override
+            # для экстренных технических изменений, которые ещё не попали в отчёт.
+            # Автоматический поток BP фильтруется через is_valid_bp_number().
+            if bp_input.startswith(BP_FILE_PREFIX) and bp_input[len(BP_FILE_PREFIX):].isdigit():
+                bp_filename = f"{bp_input}.xlsx"
+                full_bp_path = os.path.join(bp_target_dir, bp_filename)
+
+                if os.path.exists(full_bp_path):
+                    if bp_filename not in auto_bp_files and bp_filename not in manual_bp_files:
+                        manual_bp_files.append(bp_filename)
+                        print(f"    → Файл '{bp_filename}' успешно добавлен в текущую сессию обработки.")
+                    else:
+                        print(f"    [Внимание] Файл '{bp_filename}' уже находится в списке планирования.")
+                else:
+                    print(f"    [Ошибка] Файл '{bp_filename}' не обнаружен по целевому пути: '{bp_target_dir}'")
+                    print("    Пожалуйста, скачайте его и положите в указанную папку перед вводом.")
+            else:
+                print(f"    [Ошибка] Неверный формат '{bp_input}'. Используйте инженерный стандарт, например: BP12345")
+
+    # Слияние автоматического списка и ручного ввода
+    bp_files = list(set(auto_bp_files + manual_bp_files))
+
+    # Если новых нет и ручной ввод пользователь отклонил (нажал "нет" или оставил пустым)
+    if not bp_files:
+        print("\n" + "═" * 60)
+        print("  Очередь обработки пуста. Новых задач нет.")
+        print("  Выполнение программы успешно завершено. До встречи!")
+        print("═" * 60)
+        wait_for_user()
+        sys.exit(0)
+
+    print("\n" + "=" * 60)
+    print("  ФИНАЛЬНЫЙ ПЛАН ОБРАБОТКИ ТЕКУЩЕЙ СЕССИИ")
+    print("=" * 60)
+    for i, f in enumerate(sorted(bp_files), 1):
+        print(f"    {i}. {f}")
+
+    wait_for_user("\n  План утвержден. Нажмите Enter для перехода к проверке наличия файлов на диске...")
+
+
+    # =============================================================================
+    # ЭТАП 2: ПРОВЕРКА НАЛИЧИЯ BP ФАЙЛОВ (BP<номер>.xlsx)
+    # =============================================================================
+    print("\n" + "=" * 60)
+    print("ЭТАП 2: ПРОВЕРКА НАЛИЧИЯ BP ФАЙЛОВ (BP<номер>.xlsx)")
+    print("=" * 60)
+
+    while True:
+        print(f"\n  Сканирование целевой директории: '{bp_target_dir}'...")
+
+        # Фактический список BP-файлов, физически лежащих в директории
+        actual_bp_files = set(find_bp_files(
+            file_prefix=BP_FILE_PREFIX,
+            file_path=bp_target_dir
+        ))
+
+        # Ожидаемые файлы: автоматические (из new_bp_set) + добавленные вручную
+        expected_bp_files = set(bp_files)
+
+        # Пересечение: ожидаемые, которые реально есть на диске
+        existing_files = sorted(expected_bp_files & actual_bp_files)
+
+        # Отсутствующие: ожидаемые, которых нет на диске
+        missing_files = sorted(expected_bp_files - actual_bp_files)
+
+        # Лишние: файлы на диске, но не в текущем плане (не из new_bp_set и не введены вручную)
+        extra_files = sorted(actual_bp_files - expected_bp_files)
+
+        if extra_files:
+            print(f"\n  [Информация] Найдены BP-файлы вне текущего плана ({len(extra_files)}):")
+            for f in extra_files:
+                print(f"    - {f}")
+            print("  Эти файлы НЕ будут обработаны в текущей сессии.")
+
+        # Все запланированные файлы на месте — идеальный путь
+        if not missing_files:
+            print(f"  [Успех] Все запланированные файлы ({len(existing_files)} шт.) успешно обнаружены.")
+            bp_files_to_process = existing_files
+            break
+
+        # Часть файлов отсутствует
+        print(f"  [Внимание] Обнаружено файлов: {len(existing_files)}. Отсутствует: {len(missing_files)}")
+        print("  Список отсутствующих файлов:")
+        for f in missing_files:
+            print(f"    - {f}")
+
+        print("\n  Варианты действий:")
+        print("    Нажмите: 1 - Приостановить программу, докачать эти файлы и повторить проверку")
+        if existing_files:
+            print("    Нажмите: 2 - Игнорировать отсутствующие и продолжить только с найденными файлами")
+        print("    Нажмите: 3 - Отменить всё и выйти из программы")
+
+        # Формируем динамическое приглашение к вводу
+        allowed_choices = ['1', '2', '3'] if existing_files else ['1', '3']
+        choice_prompt = "  Ваш выбор (1-3): " if existing_files else "  Ваш выбор (1 или 3): "
+
+        while True:
+            user_action = ask_user_input(choice_prompt).strip()
+            if user_action in allowed_choices:
+                break
+            print("  Некорректный ввод. Пожалуйста, выберите вариант из списка.")
+
+        if user_action == '1':
+            # Даем пользователю шанс докачать файлы прямо сейчас
+            print(f"\n  [Пауза] Пожалуйста, скачайте отсутствующие файлы изменений в папку: '{bp_target_dir}'")
+            wait_for_user("  Как только файлы будут скопированы, нажмите Enter для повторной проверки...")
+            continue  # Возвращаемся на начало цикла while True и сканируем папку заново!
+
+        elif user_action == '2':
+            # Продолжаем только с теми, что нашли
+            print("\n  [Внимание] Очередь скорректирована. Отсутствующие файлы будут пропущены.")
+            bp_files_to_process = existing_files
+            break
+
+        elif user_action == '3':
+            # Спокойный, штатный выход по требованию пользователя
+            print("\n  Выполнение программы отменено пользователем. До встречи!")
+            wait_for_user()
+            sys.exit(0)
+
+    # Гарантированная финальная проверка перед запуском конвейера
+    if not bp_files_to_process:
+        print(f"\n  [Ошибка] В директории '{bp_target_dir}' по-прежнему нет ни одного файла для обработки.")
+        print("  Конвейер пуст. Программа завершает работу.")
+        wait_for_user()
+        sys.exit(0)
+
+    print(f"\n  Утверждена итоговая очередь сессии: {len(bp_files_to_process)} файлов к обработке.")
+    for i, f in enumerate(bp_files_to_process, 1):
+        print(f"    [{i}] {f}")
+
+    wait_for_user("\n  План утвержден. Нажмите Enter для запуска потокового конвейера обработки (ЭТАП 4)...")
+
+
+    # =============================================================================
+    # ЭТАП 3: ПОТОКОВАЯ ОБРАБОТКА BP И СОХРАНЕНИЕ (YYYY-mm-dd_breakpoint_data.xlsx)
+    # =============================================================================
+    print("\n" + "=" * 60)
+    print("ЭТАП 3: ПОТОКОВАЯ ОБРАБОТКА BP И СОХРАНЕНИЕ (YYYY-mm-dd_breakpoint_data.xlsx)")
+    print("=" * 60)
+
+    processed_results: Dict[Any, Any] = {}
+
+    for i, bp_file in enumerate(bp_files_to_process, 1):
+        print("\n" + "=" * 60)
+        print(f"ОБРАБОТКА BP ФАЙЛА {i}/{len(bp_files_to_process)}: {bp_file}")
+        print("=" * 60)
+
+        full_bp_input_path = os.path.join(bp_target_dir, bp_file)
+        bp_num = bp_file.replace('.xlsx', '')
+
+        print(f"  [Конвейер] Подготовка к пошаговой обработке: '{bp_num}'")
+        wait_for_user(f"  Нажмите Enter, чтобы запустить сеанс для {bp_num}...")
+
+        # 1. Запуск интерактивного конвейера для одного файла
+        result_dict: Optional[Dict[str, Any]] = process_bp_file(full_bp_input_path)
+
+        # ПРОВЕРКА НА МАРКЕР ПРОПУСКА ФАЙЛА
+        if result_dict and result_dict.get('status') == 'SKIP_FILE':
+            print(f"  [Конвейер] Файл {bp_file} успешно пропущен по решению оператора.")
+            if i < len(bp_files_to_process):
+                wait_for_user("\n  Нажмите Enter для перехода к следующему файлу изменений...")
+            continue # Переходим к следующей итерации цикла for, обрабатывая следующий файл!
+
+        if result_dict and isinstance(result_dict, dict):
+            df_processed = result_dict.get('dataframe')
+
+            if df_processed is not None and not df_processed.empty:
+                # Фиксируем в памяти текущей сессии
+                processed_results[bp_num] = df_processed
+
+                # 2. ЖЕСТКАЯ ЗАЩИТА АВТОНОМНОГО БЭКАПА (в output_backup_files)
+                save_backup(df=df_processed, bp_number=bp_num, backup_root=OUTPUT_BACKUP_ROOT)
+
+                # 3. МОМЕНТАЛЬНОЕ ИНКРЕМЕНТАЛЬНОЕ СОХРАНЕНИЕ НА ДИСК (Транзакция)
+                print(f"  [Транзакция] Фиксация изменений {bp_num} в breakpoint_data.xlsx...")
+
+                success_inject = inject_bp_to_global_report(df_processed, bp_num)
+
+                if success_inject:
+                    print(f"  [Успех] Прогресс сохранен. {bp_num} добавлен в итоговую базу данных.")
+                else:
+                    print(f"  [ВНИМАНИЕ] Не удалось выполнить инкрементальное сохранение для {bp_num}!")
+                    if not ask_yes_no("  Хотите продолжить обработку следующих файлов, несмотря на ошибку записи?"):
+                        print("  Выполнение конвейера остановлено пользователем для исправления проблем с доступом к файлу отчета.")
+                        sys.exit(0)
+
+        if i < len(bp_files_to_process):
+            wait_for_user("\n  Шаг завершен. Нажмите Enter для перехода к следующему файлу изменений...")
+
+
+    # =============================================================================
+    # ЭТАП 4: ИТОГИ
+    # =============================================================================
+    print("\n" + "=" * 60)
+    print("ЭТАП 4: ИТОГИ")
+    print("=" * 60)
+    print(f"\nОбработано файлов: {len(processed_results)}/{len(bp_files_to_process)}")
+
+    if processed_results:
+        print("\nОбработанные Breakpoint'ы:")
+        for bp_number in processed_results:
+            print(f"   - {bp_number}")
+
+        # ИТОГОВОЕ ВРЕМЯ РАБОТЫ ПРОГРАММЫ
+        total_program_time = time.time() - program_start_time
+        print("\n" + "=" * 70)
+        print("ИТОГОВОЕ ВРЕМЯ РАБОТЫ ПРОГРАММЫ")
+        print("=" * 70)
+        print(f"  Общее время: {timedelta(seconds=int(total_program_time))}")
+        print(f"  ({(total_program_time/60):.1f} минут)")
+        print("=" * 70)
+
+        return processed_results
+
+    print("\nНе обработано ни одного файла.")
+    return None
+
 
 if __name__ == "__main__":
     sys.path.insert(0, os.path.dirname(__file__))
