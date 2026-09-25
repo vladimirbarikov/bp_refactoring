@@ -15,10 +15,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python 3.14.4
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.14.4'
           cache: 'pip'
@@ -32,7 +32,7 @@ jobs:
         run: pyinstaller BREAKPOINT_REFACTORING_TOOL.spec
 
       - name: Upload artifact (for all pushes)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: BREAKPOINT_REFACTORING_TOOL_V2-windows
           path: dist/BREAKPOINT_REFACTORING_TOOL_V2/
