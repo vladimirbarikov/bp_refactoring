@@ -50,5 +50,4 @@ jobs:
         with:
           files: BREAKPOINT_REFACTORING_TOOL_V2.zip
           generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.BP_REFACTORING_RELEASE_TOKEN }}
