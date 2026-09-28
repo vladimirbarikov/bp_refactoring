@@ -59,11 +59,18 @@ BP Refactoring Tool - Инженерные ETL-инструменты нижне
         save_processed_dataframe,
     )
 
-Версия: 1.0
+Правила автономности:
+    - Модуль НЕ импортирует 'py_lib.config.core' и не знает о бизнес-константах.
+    - Все правила форматирования (палитра, ширины, зоны кладовщиков) передаются
+      в функции через аргументы из вызывающего кода (main.py).
+    - Если theme_colors не передан (None) — файл сохраняется как базовый Excel
+      без цветов, границ, объединённых шапок и жирного шрифта.
+
+Версия: 1.1
 Совместимость: Python 3.14.4+, Pandas 3.0.3+, OpenPyXL 3.1.5+
 Поддержка: PLD Engineering Center
 Дата создания: 2026-09-09
-Дата изменения: 2026-09-24
+Дата изменения: 2026-09-28
 Лицензия: MIT
 Статус: Production
 """
@@ -71,7 +78,7 @@ BP Refactoring Tool - Инженерные ETL-инструменты нижне
 import os
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -1041,170 +1048,229 @@ def save_excel_with_formatting(
     sheet_name: str = 'pivot',
     russian_headers: Optional[List[str]] = None,
     theme_colors: Optional[Dict[str, str]] = None,
-    column_width: Optional[Dict[int, int]] = None
+    column_widths: Optional[Dict[str, int]] = None,
+    warehouse_columns: Optional[List[List[str]]] = None
 ) -> bool:
     """
     Сохраняет DataFrame в Excel с форматированием и тремя строками заголовков.
 
     Структура выходного файла:
-        - Строка 0: объединённые ячейки "ДЛЯ КЛАДОВЩИКОВ" (стиль merged_cell_format)
-        - Строка 1: английские имена колонок (из df_new_data.columns) со стилем header_format
-        - Строка 2: русские переводы заголовков (если переданы) со стилем header_format
-        - Строка 3 и далее: строки данных с форматированием в зависимости от колонки
+        - Строка 0: объединённые ячейки "ДЛЯ КЛАДОВЩИКОВ" (только при включённом форматировании)
+        - Строка 1: английские имена колонок (из df_new_data.columns)
+        - Строка 2: русские переводы заголовков (если переданы)
+        - Строка 3 и далее: строки данных
 
     Аргументы:
-        df_new_data (pd.DataFrame): DataFrame с данными (без строк заголовков)
-        output_filename (str): Имя выходного файла
-        sheet_name (str): Имя листа в Excel. По умолчанию 'pivot'
-        russian_headers (Optional[List[str]]): Список русских переводов для второй строки.
-        theme_colors (Optional[Dict[str, str]]): Словарь цветов.
-            Если None — берётся из py_lib.config.core.EXCEL_THEME_COLORS.
-        column_width (Optional[Dict[int, int]]): Словарь ширины колонок.
-            Если None — берётся из py_lib.config.core.EXCEL_COLUMN_WIDTHS.
+        df_new_data (pd.DataFrame): DataFrame с данными (без строк заголовков).
+        output_filename (str):      Имя выходного файла.
+        sheet_name (str):           Имя листа в Excel. По умолчанию 'pivot'.
+        russian_headers (Optional[List[str]]):
+            Список русских переводов для второй строки заголовков.
+        theme_colors (Optional[Dict[str, str]]):
+            Словарь цветов оформления (5 ключей: warehouse_bg, warehouse_text,
+            header_bg, header_text, data_bg).
+            Если None — форматирование ОТКЛЮЧЕНО полностью: файл сохраняется
+            как базовый Excel (без цветов, границ, объединённых шапок,
+            жирного шрифта). Данные и три строки заголовков пишутся как есть.
+        column_widths (Optional[Dict[str, int]]):
+            Ширина колонок по ИМЕНАМ колонок.
+            Если None — все колонки получают ширину 25.
+            Колонки, отсутствующие в словаре, получают дефолт.
+            Применяется независимо от того, включено ли форматирование.
+        warehouse_columns (Optional[List[List[str]]]):
+            Список зон «ДЛЯ КЛАДОВЩИКОВ» (по именам колонок).
+            Каждая зона — непрерывный диапазон колонок в df_new_data.
+            Если None — шапки «ДЛЯ КЛАДОВЩИКОВ» не рисуются, оранжевый
+            фон не применяется.
+            Игнорируется, если theme_colors is None.
 
     Возвращается:
-        bool: True если сохранение успешно, False при ошибке
+        bool: True если сохранение успешно, False при любой ошибке.
+              Fallback-сохранение через pd.to_excel() НЕ выполняется:
+              при сбое файл не пишется, вызывающий код получает False.
     """
-    from py_lib.config.core import EXCEL_COLUMN_WIDTHS, EXCEL_THEME_COLORS
+    # === Разрешение аргументов ===
+    widths_by_name = column_widths if column_widths is not None else {}
+    zones_by_name = warehouse_columns if warehouse_columns is not None else []
 
-    colors = theme_colors or EXCEL_THEME_COLORS
-    widths = column_width or EXCEL_COLUMN_WIDTHS
+    # Режим форматирования: включён ТОЛЬКО если передана палитра.
+    # Если theme_colors is None — сохраняем "сырой" базовый Excel без
+    # цветов, границ, объединённых шапок и жирного шрифта.
+    formatting_enabled = theme_colors is not None
 
     # Защита от любых NaN/Inf
     df_new_data = df_new_data.replace([np.nan, np.inf, -np.inf], 0)
+
+    # === Резолв имён колонок → индексов (один раз на весь вызов) ===
+    columns = df_new_data.columns
+    column_names: List[str] = list(columns)
+
+    # 1. Зоны «ДЛЯ КЛАДОВЩИКОВ»: (start_idx, end_idx) для merge_range и покраски.
+    #    Считаются только если включено форматирование и переданы зоны.
+    warehouse_zones: List[Tuple[int, int]] = []
+    if formatting_enabled and zones_by_name:
+        for zone in zones_by_name:
+            present = [c for c in zone if c in columns]
+            if not present:
+                continue
+            start = column_names.index(present[0])
+            end = column_names.index(present[-1])
+            warehouse_zones.append((start, end))
+
+    # 2. Ширины: {индекс_колонки: ширина}.
+    #    Применяются всегда, независимо от режима форматирования.
+    resolved_widths: Dict[int, int] = {}
+    for col_name, width in widths_by_name.items():
+        if col_name in columns:
+            resolved_widths[column_names.index(col_name)] = width
 
     try:
         with pd.ExcelWriter(output_filename, engine='xlsxwriter') as writer:
             workbook = writer.book
             worksheet = workbook.add_worksheet(sheet_name)
 
-            # === Собираем динамические форматы на основе конфига цветов ===
-            warehouse_merged_format = workbook.add_format({
-                'font_name': 'Arial', 'font_size': 10, 'bold': True,
-                'font_color': colors.get('warehouse_text', 'black'), 
-                'bg_color': colors.get('warehouse_bg', '#FDE9D9'),
-                'valign': 'vcenter', 'align': 'center', 'text_wrap': True, 'border': 1
-            })
+            # === Создаём форматы ТОЛЬКО если форматирование включено ===
+            # При formatting_enabled == False форматы не создаются,
+            # а данные пишутся без format-аргумента.
+            warehouse_merged_format = None
+            header_format = None
+            data_format = None
+            warehouse_format = None
+            wrap_format = None
+            wrap_warehouse_format = None
 
-            header_format = workbook.add_format({
-                'font_name': 'Arial', 'font_size': 10, 'bold': True,
-                'font_color': colors.get('header_text', 'white'), 
-                'bg_color': colors.get('header_bg', '#0F243E'),
-                'valign': 'center', 'align': 'center', 'text_wrap': True, 'border': 1
-            })
+            if formatting_enabled:
+                colors = theme_colors
 
-            data_format = workbook.add_format({
-                'font_name': 'Arial', 'font_size': 10, 
-                'font_color': 'black', 'bg_color': colors.get('data_bg', '#FFFFFF'), 
-                'valign': 'top'
-            })
+                warehouse_merged_format = workbook.add_format({
+                    'font_name': 'Arial', 'font_size': 10, 'bold': True,
+                    'font_color': colors.get('warehouse_text', 'black'),
+                    'bg_color': colors.get('warehouse_bg', '#FFFFFF'),
+                    'valign': 'vcenter', 'align': 'center',
+                    'text_wrap': True, 'border': 1
+                })
 
-            columns_e_p_format = workbook.add_format({
-                'font_name': 'Arial', 'font_size': 10, 'font_color': 'black',
-                'bg_color': colors.get('warehouse_bg', '#FDE9D9'), 'valign': 'top'
-            })
+                header_format = workbook.add_format({
+                    'font_name': 'Arial', 'font_size': 10, 'bold': True,
+                    'font_color': colors.get('header_text', 'white'),
+                    'bg_color': colors.get('header_bg', '#0F243E'),
+                    'valign': 'center', 'align': 'center',
+                    'text_wrap': True, 'border': 1
+                })
 
-            columns_ac_ad_format = workbook.add_format({
-                'font_name': 'Arial', 'font_size': 10, 'font_color': 'black',
-                'bg_color': colors.get('warehouse_bg', '#FDE9D9'), 'valign': 'top'
-            })
+                data_format = workbook.add_format({
+                    'font_name': 'Arial', 'font_size': 10,
+                    'font_color': 'black',
+                    'bg_color': colors.get('data_bg', '#FFFFFF'),
+                    'valign': 'top'
+                })
 
-            wrap_format = workbook.add_format({
-                'font_name': 'Arial', 'font_size': 10, 'font_color': 'black',
-                'bg_color': colors.get('data_bg', '#FFFFFF'), 'text_wrap': True, 'valign': 'top'
-            })
+                warehouse_format = workbook.add_format({
+                    'font_name': 'Arial', 'font_size': 10,
+                    'font_color': 'black',
+                    'bg_color': colors.get('warehouse_bg', '#FFFFFF'),
+                    'valign': 'top'
+                })
 
-            wrap_e_p_format = workbook.add_format({
-                'font_name': 'Arial', 'font_size': 10, 'font_color': 'black',
-                'bg_color': colors.get('warehouse_bg', '#FDE9D9'), 'text_wrap': True, 'valign': 'top'
-            })
+                wrap_format = workbook.add_format({
+                    'font_name': 'Arial', 'font_size': 10,
+                    'font_color': 'black',
+                    'bg_color': colors.get('data_bg', '#FFFFFF'),
+                    'text_wrap': True, 'valign': 'top'
+                })
 
-            wrap_ac_ad_format = workbook.add_format({
-                'font_name': 'Arial', 'font_size': 10, 'font_color': 'black',
-                'bg_color': colors.get('warehouse_bg', '#FDE9D9'), 'text_wrap': True, 'valign': 'top'
-            })
+                wrap_warehouse_format = workbook.add_format({
+                    'font_name': 'Arial', 'font_size': 10,
+                    'font_color': 'black',
+                    'bg_color': colors.get('warehouse_bg', '#FFFFFF'),
+                    'text_wrap': True, 'valign': 'top'
+                })
 
-            columns_wrap_format = workbook.add_format({
-                'font_name': 'Arial', 'font_size': 10, 'font_color': 'black',
-                'bg_color': colors.get('data_bg', '#FFFFFF'), 'text_wrap': True, 'valign': 'top'
-            })
-
-            # === Настройка ширины колонок из конфигурации ===
-            # Если для колонки нет явного правила в EXCEL_COLUMN_WIDTHS, задаем стандартные 25
+            # === Настройка ширины колонок ===
+            # Технический дефолт xlsxwriter-нейтральной ширины: 25.
+            # Колонки без явного правила получают эту ширину.
+            # Применяется независимо от режима форматирования.
             for col_num in range(len(df_new_data.columns)):
-                width = widths.get(col_num, 25)
+                width = resolved_widths.get(col_num, 25)
                 worksheet.set_column(col_num, col_num, width)
 
-            columns_e_p_indices = list(range(4, 16))
-            columns_ac_ad_indices = [28, 29]
-            columns_wrap_indices = [34, 35, 38]
+            # === СТРОКА 0: объединённые ячейки «ДЛЯ КЛАДОВЩИКОВ» ===
+            # Рисуются только при включённом форматировании и наличии зон.
+            if formatting_enabled and warehouse_zones:
+                for start, end in warehouse_zones:
+                    worksheet.merge_range(0, start, 0, end, "ДЛЯ КЛАДОВЩИКОВ", warehouse_merged_format)
 
-            # === СТРОКА 0: объединённые ячейки ===
-            if len(df_new_data.columns) > 15:
-                worksheet.merge_range(0, 4, 0, 15, "ДЛЯ КЛАДОВЩИКОВ", warehouse_merged_format)
-            if len(df_new_data.columns) > 29:
-                worksheet.merge_range(0, 28, 0, 29, "ДЛЯ КЛАДОВЩИКОВ", warehouse_merged_format)
-
-            for col_num in range(len(df_new_data.columns)):
-                # Пропускаем индексы из диапазонов 4..15 и 28..29, так как они объединены
-                if col_num in columns_e_p_indices or col_num in columns_ac_ad_indices:
-                    continue
-                worksheet.write(0, col_num, '')
+                # Пустые ячейки во всех остальных колонках строки 0
+                for col_num in range(len(df_new_data.columns)):
+                    if any(start <= col_num <= end for start, end in warehouse_zones):
+                        continue
+                    worksheet.write(0, col_num, '')
 
             # === СТРОКА 1: английские заголовки ===
             for col_num, header in enumerate(df_new_data.columns):
-                worksheet.write(1, col_num, header, header_format)
+                if formatting_enabled:
+                    worksheet.write(1, col_num, header, header_format)
+                else:
+                    worksheet.write(1, col_num, header)
 
             # === СТРОКА 2: русские заголовки ===
             if russian_headers is not None and len(russian_headers) == len(df_new_data.columns):
                 for col_num, rus_header in enumerate(russian_headers):
-                    worksheet.write(2, col_num, rus_header, header_format)
+                    if formatting_enabled:
+                        worksheet.write(2, col_num, rus_header, header_format)
+                    else:
+                        worksheet.write(2, col_num, rus_header)
             else:
                 for col_num in range(len(df_new_data.columns)):
-                    worksheet.write(2, col_num, '', header_format)
+                    if formatting_enabled:
+                        worksheet.write(2, col_num, '', header_format)
+                    else:
+                        worksheet.write(2, col_num, '')
 
             # === ДАННЫЕ (начиная со строки 3) ===
             for row_num in range(len(df_new_data)):
                 for col_num in range(len(df_new_data.columns)):
                     value = df_new_data.iloc[row_num, col_num]
-                    is_long_text = isinstance(value, str) and len(value) > 50
                     excel_row = row_num + 3
 
-                    if col_num in columns_wrap_indices:
-                        worksheet.write(excel_row, col_num, value, columns_wrap_format)
-                    elif col_num in columns_e_p_indices:
-                        if is_long_text:
-                            worksheet.write(excel_row, col_num, value, wrap_e_p_format)
-                        else:
-                            worksheet.write(excel_row, col_num, value, columns_e_p_format)
-                    elif col_num in columns_ac_ad_indices:
-                        if is_long_text:
-                            worksheet.write(excel_row, col_num, value, wrap_ac_ad_format)
-                        else:
-                            worksheet.write(excel_row, col_num, value, columns_ac_ad_format)
-                    else:
-                        if is_long_text:
-                            worksheet.write(excel_row, col_num, value, wrap_format)
-                        else:
-                            worksheet.write(excel_row, col_num, value, data_format)
+                    # Без форматирования — простая запись значения
+                    if not formatting_enabled:
+                        worksheet.write(excel_row, col_num, value)
+                        continue
 
-        print(f"  Файл '{output_filename}' сохранён с форматированием (три строки заголовков)")
+                    is_long_text = isinstance(value, str) and len(value) > 50
+                    in_warehouse = any(
+                        start <= col_num <= end for start, end in warehouse_zones
+                    )
+
+                    if in_warehouse:
+                        fmt = wrap_warehouse_format if is_long_text else warehouse_format
+                    else:
+                        fmt = wrap_format if is_long_text else data_format
+
+                    worksheet.write(excel_row, col_num, value, fmt)
+
+        if formatting_enabled:
+            print(f"  Файл '{output_filename}' сохранён с форматированием (три строки заголовков).")
+        else:
+            print(f"  Файл '{output_filename}' сохранён без форматирования (базовый Excel).")
         return True
 
     except ImportError as e:
-        print(f"  Ошибка импорта xlsxwriter: {e}")
-        print("  Установите xlsxwriter: pip install xlsxwriter")
-        print("  Сохраняем без форматирования...")
-        df_new_data.to_excel(output_filename, index=False)
+        print(f"  [ОШИБКА] Не удалось загрузить xlsxwriter: {e}")
+        print("  Установите зависимость командой: pip install xlsxwriter")
+        print(f"  Файл '{output_filename}' НЕ сохранён.")
+        print("  Резервная копия (без форматирования) сохранена отдельно.")
         return False
     except PermissionError:
-        print(f"  Ошибка: Нет прав для записи в файл '{output_filename}'")
-        print("  Закройте файл, если он открыт в Excel, и попробуйте снова.")
+        print(f"  [ОШИБКА] Нет прав для записи в файл '{output_filename}'.")
+        print("  Закройте файл, если он открыт в Excel, и повторите попытку.")
+        print(f"  Файл '{output_filename}' НЕ сохранён.")
         return False
     except Exception as e:
-        print(f"  Ошибка при сохранении с форматированием: {e}")
-        print("  Сохраняем без форматирования...")
-        df_new_data.to_excel(output_filename, index=False)
+        print(f"  [ОШИБКА] Сбой при сохранении с форматированием: {e}")
+        print(f"  Файл '{output_filename}' НЕ сохранён.")
+        print("  Данные BP зафиксированы только в резервной копии (без форматирования).")
         return False
 
 
@@ -1216,7 +1282,10 @@ def save_processed_dataframe(
     datetime_columns: Optional[List[str]] = None,
     force_separate: bool = False,
     history_dir: Optional[str] = None,
-    output_dir: Optional[str] = None
+    output_dir: Optional[str] = None,
+    excel_theme_colors: Optional[Dict[str, str]] = None,
+    excel_column_widths: Optional[Dict[str, int]] = None,
+    excel_warehouse_columns: Optional[List[List[str]]] = None
 ) -> Optional[str]:
     """
     Универсально сохраняет обработанный DataFrame с возможностью объединения 
@@ -1242,13 +1311,26 @@ def save_processed_dataframe(
                                              файл отчёта. Если None — используется
                                              текущая рабочая директория (os.getcwd()).
                                              Пример: 'output_files/output_breakpoint_data_files'.
+        excel_theme_colors (dict, optional): Словарь цветов оформления Excel
+                                             (5 ключей: warehouse_bg, warehouse_text, header_bg,
+                                             header_text, data_bg).
+                                             Пробрасывается в save_excel_with_formatting().
+                                             Если None — форматирование отключено, файл
+                                             сохраняется как базовый Excel.
+        excel_column_widths (dict, optional): Ширины колонок по именам.
+                                             Пробрасывается в save_excel_with_formatting().
+                                             Если None — все колонки получают ширину 25.
+        excel_warehouse_columns (list, opt):  Список зон «ДЛЯ КЛАДОВЩИКОВ» по именам колонок.
+                                             Пробрасывается в save_excel_with_formatting().
+                                             Если None — шапки не рисуются, фон не применяется.
 
     Возвращается:
         Optional[str]: 
             - Полный путь к успешно сохранённому файлу Excel (str).
             - Строковый маркер "STRUCTURE_MISMATCH", если обнаружено несовпадение колонок 
               между новыми и историческими данными (требуется реакция вызывающего уровня).
-            - None при возникновении критической ошибки записи или отсутствии данных.
+            - None при возникновении критической ошибки записи, сбое форматирования
+              или отсутствии данных.
     """
     # Инициализация параметров и путей
     translations_map = column_translation or {}
@@ -1290,7 +1372,12 @@ def save_processed_dataframe(
         full_output_path = os.path.join(target_dir, filename)
 
         success = save_excel_with_formatting(
-            df_new_data, full_output_path, russian_headers=russian_headers_list
+            df_new_data,
+            full_output_path,
+            russian_headers=russian_headers_list,
+            theme_colors=excel_theme_colors,
+            column_widths=excel_column_widths,
+            warehouse_columns=excel_warehouse_columns,
         )
         return full_output_path if success else None
 
@@ -1317,7 +1404,12 @@ def save_processed_dataframe(
 
     print(f"  [Экспорт] Сохранение файла Excel с форматированием: {full_output_path}")
     success = save_excel_with_formatting(
-        df_combined, full_output_path, russian_headers=russian_headers_list
+        df_combined,
+        full_output_path,
+        russian_headers=russian_headers_list,
+        theme_colors=excel_theme_colors,
+        column_widths=excel_column_widths,
+        warehouse_columns=excel_warehouse_columns,
     )
 
     return full_output_path if success else None

@@ -41,7 +41,9 @@ BP Refactoring Tool - Центральный конфигурационный м
         STEP_FOCUS_COLUMNS_MAP — колонки предпоказа для каждого шага.
 
     10. НАСТРОЙКИ СТИЛЕЙ И ВИЗУАЛЬНОГО ОФОРМЛЕНИЯ EXCEL
-        EXCEL_THEME_COLORS, EXCEL_COLUMN_WIDTHS — палитра и ширина колонок.
+        EXCEL_THEME_COLORS — палитра;
+        EXCEL_WAREHOUSE_COLUMNS — две зоны «ДЛЯ КЛАДОВЩИКОВ»;
+        EXCEL_COLUMN_WIDTHS — ширины колонок по именам.
 
     11. МАТРИЦА ЦЕХОВ / РАБОЧИХ СТАНЦИЙ
         WORKSHOPS, WORKSHOP_PREFIX_TO_CODE — определение цеха по воркцентру.
@@ -65,11 +67,11 @@ BP Refactoring Tool - Центральный конфигурационный м
         WORKSHOPS,
     )
 
-Версия: 1.0
+Версия: 1.1
 Совместимость: Python 3.14.4+, Pandas 3.0.3+, OpenPyXL 3.1.5+
 Поддержка: PLD Engineering Center
 Дата создания: 2026-05-14
-Дата изменения: 2026-09-24
+Дата изменения: 2026-09-28
 Лицензия: MIT
 Статус: Production
 """
@@ -89,8 +91,8 @@ INPUT_CONFIGURATION_DIR: str = "input_files/input_configuration_files"
 INPUT_PACKING_LIST_DIR: str = "input_files/input_packing_list_files"
 
 # --- Выходные данные ---
-OUTPUT_BACKUP_ROOT: str = "output_files/output_backup_files"
-OUTPUT_BREAKPOINT_DATA_ROOT: str = "output_files/output_breakpoint_data_files"
+OUTPUT_BACKUP_DIR: str = "output_files/output_backup_files"
+OUTPUT_BREAKPOINT_DATA_DIR: str = "output_files/output_breakpoint_data_files"
 
 
 # ========================================================================
@@ -648,7 +650,7 @@ STEP_FOCUS_COLUMNS_MAP: List[List[str]] = [
 # 10. НАСТРОЙКИ СТИЛЕЙ И ВИЗУАЛЬНОГО ОФОРМЛЕНИЯ EXCEL
 # ====================================================================
 
-# Цвета оформления (HEX-коды)
+# 1. Цвета оформления (HEX-коды)
 EXCEL_THEME_COLORS: Dict[str, str] = {
     'warehouse_bg': '#FDE9D9',      # Нежно-оранжевый для кладовщиков
     'warehouse_text': 'black',
@@ -657,14 +659,51 @@ EXCEL_THEME_COLORS: Dict[str, str] = {
     'data_bg': '#FFFFFF'            # Белый фон для обычных ячеек
 }
 
-# Ширина колонок по их индексам
-EXCEL_COLUMN_WIDTHS: Dict[int, int] = {
-    0: 25, 1: 25, 2: 25, 3: 25, 4: 25, 5: 25, 6: 25, 7: 25,
-    8: 80, 9: 25, 10: 25, 11: 25, 12: 25, 13: 25, 14: 25,
-    15: 80, 16: 30, 17: 50, 18: 30, 19: 50,
-    20: 30, 21: 30, 22: 30, 23: 30, 24: 30, 25: 30, 26: 30, 27: 30,
-    28: 50, 29: 50, 30: 80, 31: 25, 32: 80, 33: 25,
-    34: 100, 35: 100, 36: 25, 37: 25, 38: 100,
+# 2. Две зоны «ДЛЯ КЛАДОВЩИКОВ» (по именам колонок)
+#    Порядок колонок внутри каждой зоны должен соответствовать
+#    фактическому порядку в BP_DATA_COLUMNS_ORDER.
+EXCEL_WAREHOUSE_COLUMNS: List[List[str]] = [
+    # Зона 1: непрерывный блок индексов 4..16
+    [
+        'Batch Fact',
+        'Change Date',
+        'BOM Product Code',
+        'BOM Product Name',
+        'Part No. Before',
+        'Part Name Before',
+        'Quantity Parts in SS',
+        'Quantity Batches in SS',
+        'Configuration for Old Parts Using Out',
+        'Batches for Old Parts Using Out',
+        'Transmission',
+        'Part No. After',
+        'Part Name After',
+    ],
+    # Зона 2: отдельный блок Production Part Disposal + Interchangeable
+    [
+        'Production Part Disposal',
+        'Interchangeable',
+    ],
+]
+
+# 3. Ширина колонок по их именам (в символах Excel)
+#    Если колонка отсутствует в словаре — применяется дефолт 25 (см. etl.py).
+EXCEL_COLUMN_WIDTHS: Dict[str, int] = {
+    'BP_No': 20,
+    'Change Description (RUS)': 60,
+    'Change Solution (RUS)': 60,
+    'Comments': 50,
+    'Configuration for Old Parts Using Out': 20,
+    'Batches for Old Parts Using Out': 20,
+    'Transmission': 20,
+    'Part Name Before': 40,
+    'Part Name After': 40,
+    'Supplier Name Before': 35,
+    'Supplier Name After': 35,
+    'Workcenter Name Before': 30,
+    'Workcenter Name After': 30,
+    'Workshop Name Before': 30,
+    'Workshop Name After': 30,
 }
 
 

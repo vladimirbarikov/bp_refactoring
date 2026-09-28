@@ -4,7 +4,7 @@
 # pylint: disable=too-many-lines
 # pylint: disable=import-outside-toplevel
 """
-BP Refactoring Tool - Точка входа (V2.0)
+BP Refactoring Tool - Точка входа (V2.0.1)
 
 Этот модуль является главной точкой входа в приложение Breakpoint Refactoring Tool.
 
@@ -39,11 +39,11 @@ BP Refactoring Tool - Точка входа (V2.0)
 Использование:
     python main.py
 
-Версия: 2.0
+Версия: 2.0.1
 Совместимость: Python 3.14.4+, Pandas 3.0.3+, OpenPyXL 3.1.5+
 Поддержка: PLD Engineering Center
 Дата создания: 2026-05-14
-Дата изменения: 2026-09-24
+Дата изменения: 2026-09-28
 Лицензия: MIT
 Статус: Production
 """
@@ -54,7 +54,7 @@ import time
 import traceback
 import warnings
 from datetime import timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
@@ -64,9 +64,11 @@ from py_lib.config.core import (
     INPUT_BREAKPOINT_DATA_DIR,
     INPUT_BREAKPOINT_REPORT_DIR,
     INPUT_BREAKPOINT_FILES_DIR,
+    INPUT_CONFIGURATION_DIR,
+    INPUT_PACKING_LIST_DIR,
     # --- Выходные данные ---
-    OUTPUT_BACKUP_ROOT,
-    OUTPUT_BREAKPOINT_DATA_ROOT,
+    OUTPUT_BACKUP_DIR,
+    OUTPUT_BREAKPOINT_DATA_DIR,
 
     # Шаги обработки технических изменений
     BP_STEP_DESCRIPTIONS,
@@ -87,6 +89,11 @@ from py_lib.config.core import (
     BP_DATA_INT_COLS,
     BP_DATA_DATETIME_COLS,
     BP_DATA_TRANSLATION_COLS,
+
+    # Настройки визуального оформления Excel
+    EXCEL_THEME_COLORS,
+    EXCEL_COLUMN_WIDTHS,
+    EXCEL_WAREHOUSE_COLUMNS,
 )
 
 from py_lib.engine.etl import (
@@ -305,6 +312,84 @@ def new_bp_check() -> Optional[set]:
     return new_bp_set
 
 
+def ensure_project_directories() -> None:
+    """
+    Проверяет наличие всех рабочих директорий проекта и создаёт отсутствующие.
+
+    Директории описаны в py_lib.config.core и делятся на две группы:
+        - входные (input_files/...): сюда оператор кладёт Excel-файлы
+          (BP, отчёты, конфигурация, упаковочные листы);
+        - выходные (output_files/...): сюда программа пишет результаты
+          и резервные копии.
+
+    Функция вызывается один раз при старте main(), до баннера и аудита.
+    Создание рекурсивное: os.makedirs() создаёт всю цепочку,
+    включая 'input_files' и 'output_files', если их нет.
+
+    Ничего не возвращает; при ошибке создания выводит сообщение и
+    позволяет программе продолжить — падение произойдёт позже,
+    на этапе чтения/записи, с более понятной ошибкой.
+    """
+    # Все директории проекта, сгруппированные по назначению.
+    # Источник — py_lib/config/core.py (единое хранилище путей).
+    project_dirs: List[str] = [
+        # --- Входные данные (оператор кладёт файлы) ---
+        INPUT_BREAKPOINT_REPORT_DIR,
+        INPUT_BREAKPOINT_DATA_DIR,
+        INPUT_BREAKPOINT_FILES_DIR,
+        INPUT_CONFIGURATION_DIR,
+        INPUT_PACKING_LIST_DIR,
+        # --- Выходные данные (программа пишет результаты) ---
+        OUTPUT_BACKUP_DIR,
+        OUTPUT_BREAKPOINT_DATA_DIR,
+    ]
+
+    created_dirs: List[str] = []
+    failed_dirs: List[str] = []
+
+    for dir_path in project_dirs:
+        if os.path.exists(dir_path):
+            continue
+        try:
+            os.makedirs(dir_path)
+            created_dirs.append(dir_path)
+        except PermissionError as e:
+            print(f"  [ОШИБКА] Нет прав для создания директории '{dir_path}': {e}")
+            failed_dirs.append(dir_path)
+        except FileExistsError as e:
+            # На диске есть файл с таким именем — надо предупредить явно
+            print(f"  [ОШИБКА] По пути '{dir_path}' уже существует файл с таким именем: {e}")
+            failed_dirs.append(dir_path)
+        except NotADirectoryError as e:
+            # Один из компонентов пути — файл, а не папка
+            print(f"  [ОШИБКА] Компонент пути '{dir_path}' не является директорией: {e}")
+            failed_dirs.append(dir_path)
+        except OSError as e:
+            # Базовый OSError — диск полон, слишком длинный путь и т.п.
+            print(f"  [ОШИБКА] Не удалось создать директорию '{dir_path}': {e}")
+            failed_dirs.append(dir_path)
+
+    if created_dirs:
+        print("\n" + "=" * 60)
+        print("  [Подготовка] Созданы отсутствующие рабочие директории:")
+        print("=" * 60)
+        for d in created_dirs:
+            print(f"    + {d}")
+        print("\n  Пожалуйста, поместите необходимые Excel-файлы в соответствующие")
+        print("  подпапки 'input_files/' перед началом обработки.")
+        print("=" * 60)
+
+    if failed_dirs:
+        print("\n" + "!" * 60)
+        print("  [ВНИМАНИЕ] Не удалось создать следующие директории:")
+        print("!" * 60)
+        for d in failed_dirs:
+            print(f"    - {d}")
+        print("\n  Программа продолжит работу, но при чтении/записи файлов")
+        print("  в этих директориях возникнут ошибки. Проверьте права доступа.")
+        print("!" * 60)
+
+
 def inject_bp_to_global_report(
     df_bp_clean: pd.DataFrame,
     bp_number: str
@@ -314,7 +399,7 @@ def inject_bp_to_global_report(
     в глобальный исторический файл breakpoint_data.xlsx.
 
     Логика выбора источника истории (history_dir):
-        1. Если в OUTPUT_BREAKPOINT_DATA_ROOT уже существует файл текущей сессии
+        1. Если в OUTPUT_BREAKPOINT_DATA_DIR уже существует файл текущей сессии
            (YYYY-MM-DD_breakpoint_data.xlsx) — значит, предыдущие BP в этой сессии
            уже сохранялись. Читаем историю из OUTPUT, чтобы не потерять их при
            объединении.
@@ -324,28 +409,34 @@ def inject_bp_to_global_report(
     Это обеспечивает корректное накопление данных в рамках одной сессии:
     каждый следующий BP читает уже обновлённую базу из OUTPUT и добавляет к ней.
 
+    Обработка ошибок:
+        - PermissionError   — файл истории открыт в Excel или нет прав на запись;
+        - FileNotFoundError — путь истории не существует или файл не найден;
+        - OSError           — дисковые проблемы, слишком длинный путь;
+        - Exception         — последний рубеж, чтобы одна ошибка не уронила сессию.
+
     Аргументы:
         df_bp_clean (pd.DataFrame): Обработанный DataFrame одного BP.
         bp_number (str):            Номер BP (для сообщений).
 
     Возвращается:
-        bool: True при успешной записи, False при ошибке.
+        bool: True при успешной записи, False при любой ошибке.
     """
+    # Определяем, откуда читать историю для объединения.
+    output_history_file = get_daily_report_path(
+        file_prefix=BP_DATA_PREFIX,
+        output_dir=OUTPUT_BREAKPOINT_DATA_DIR,
+    )
+
+    if os.path.exists(output_history_file):
+        # Предыдущий BP текущей сессии уже сохранён — читаем из OUTPUT,
+        # чтобы не потерять его строки при следующем объединении.
+        history_dir = OUTPUT_BREAKPOINT_DATA_DIR
+    else:
+        # Первый BP сессии — читаем исходную базу из INPUT.
+        history_dir = INPUT_BREAKPOINT_DATA_DIR
+
     try:
-        # Определяем, откуда читать историю для объединения.
-        output_history_file = get_daily_report_path(
-            file_prefix=BP_DATA_PREFIX,
-            output_dir=OUTPUT_BREAKPOINT_DATA_ROOT,
-        )
-
-        if os.path.exists(output_history_file):
-            # Предыдущий BP текущей сессии уже сохранён — читаем из OUTPUT,
-            # чтобы не потерять его строки при следующем объединении.
-            history_dir = OUTPUT_BREAKPOINT_DATA_ROOT
-        else:
-            # Первый BP сессии — читаем исходную базу из INPUT.
-            history_dir = INPUT_BREAKPOINT_DATA_DIR
-
         export_path = save_processed_dataframe(
             df_new_data=df_bp_clean,
             file_prefix=BP_DATA_PREFIX,
@@ -353,19 +444,37 @@ def inject_bp_to_global_report(
             int_columns=BP_DATA_INT_COLS,
             datetime_columns=BP_DATA_DATETIME_COLS,
             history_dir=history_dir,
-            output_dir=OUTPUT_BREAKPOINT_DATA_ROOT,
+            output_dir=OUTPUT_BREAKPOINT_DATA_DIR,
+            excel_theme_colors=EXCEL_THEME_COLORS,
+            excel_column_widths=EXCEL_COLUMN_WIDTHS,
+            excel_warehouse_columns=EXCEL_WAREHOUSE_COLUMNS,
         )
-
-        if export_path == "STRUCTURE_MISMATCH":
-            print(f"  [Ошибка записи] Структура колонок файла {bp_number} нарушает формат базы данных!")
-            return False
-        elif export_path:
-            return True
-
+    except PermissionError as e:
+        print(f"  [ОШИБКА] Нет прав на запись в файл breakpoint_data.xlsx для {bp_number}: {e}")
+        print("  Закройте файл, если он открыт в Excel, и повторите попытку.")
+        return False
+    except FileNotFoundError as e:
+        print(f"  [ОШИБКА] Не найден путь для сохранения данных {bp_number}: {e}")
+        print("  Проверьте, что директория выходных файлов существует и доступна.")
+        return False
+    except OSError as e:
+        print(f"  [ОШИБКА] Сбой файловой системы при записи {bp_number}: {e}")
         return False
     except Exception as e:
-        print(f"  [Системный сбой] Ошибка при попытке транзакционной записи {bp_number} на диск: {e}")
+        # Последний рубеж: любая ошибка внутри save_processed_dataframe()
+        # или нештатных данных. Не роняем программу — оператор получит
+        # понятное сообщение и сможет продолжить сессию.
+        print(f"  [НЕПРЕДВИДЕННАЯ ОШИБКА] Не удалось сохранить {bp_number}: {e}")
+        print(f"  Тип ошибки: {type(e).__name__}")
         return False
+
+    if export_path == "STRUCTURE_MISMATCH":
+        print(f"  [Ошибка записи] Структура колонок файла {bp_number} нарушает формат базы данных!")
+        return False
+    elif export_path:
+        return True
+
+    return False
 
 
 def main():
@@ -382,6 +491,9 @@ def main():
     """
     clear_screen()
 
+    # Подготовка рабочей папки: проверка и создание отсутствующих директорий
+    ensure_project_directories()
+
     # НАЧАЛО ЗАМЕРА ОБЩЕГО ВРЕМЕНИ ПРОГРАММЫ
     program_start_time = time.time()
 
@@ -391,9 +503,9 @@ def main():
 
     print("""
             ╔══════════════════════════════════════════════════════════════╗
-            ║               BREAKPOINT REFACTORING TOOL V2.0               ║
+            ║              BREAKPOINT REFACTORING TOOL V2.0.1              ║
             ║                          ----------                          ║
-            ║      ПРИЛОЖЕНИЕ ДЛЯ ОБРАБОТКИ ТЕХНИЧЕСКИХ ИЗМЕНЕНИЙ V2.0     ║
+            ║     ПРИЛОЖЕНИЕ ДЛЯ ОБРАБОТКИ ТЕХНИЧЕСКИХ ИЗМЕНЕНИЙ V2.0.1    ║
             ╚══════════════════════════════════════════════════════════════╝
             """)
 
@@ -431,7 +543,7 @@ def main():
     print("      • Структура для корректной работы программы:")
     print("""
                 .
-                ├── BREAKPOINT_REFACTORING_TOOL_V2.0.exe
+                ├── BREAKPOINT_REFACTORING_TOOL_V2.exe
                 ├── input_files
                 │   ├── input_breakpoint_data_files
                 │   │   └── YYYY-mm-dd_breakpoint_data.xlsx
@@ -713,7 +825,7 @@ def main():
                 processed_results[bp_num] = df_processed
 
                 # 2. ЖЕСТКАЯ ЗАЩИТА АВТОНОМНОГО БЭКАПА (в output_backup_files)
-                save_backup(df=df_processed, bp_number=bp_num, backup_root=OUTPUT_BACKUP_ROOT)
+                save_backup(df=df_processed, bp_number=bp_num, backup_root=OUTPUT_BACKUP_DIR)
 
                 # 3. МОМЕНТАЛЬНОЕ ИНКРЕМЕНТАЛЬНОЕ СОХРАНЕНИЕ НА ДИСК (Транзакция)
                 print(f"  [Транзакция] Фиксация изменений {bp_num} в breakpoint_data.xlsx...")

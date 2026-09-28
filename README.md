@@ -10,7 +10,7 @@
     <br>
     BREAKPOINT REFACTORING TOOL
     <br>
-    <img src="https://img.shields.io/badge/version-2.0-blue.svg" alt="Version 2.0">
+    <img src="https://img.shields.io/badge/version-2.0.1-blue.svg" alt="Version 2.0.1">
     <img src="https://img.shields.io/badge/python-3.14.4%2B-green.svg" alt="Python 3.14.4+">
     <img src="https://img.shields.io/badge/pandas-3.0.3%2B-green.svg" alt="Pandas 3.0.3+">
     <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License MIT">
@@ -29,6 +29,7 @@
     <a href="#требования-к-входным-файлам">Требования</a> •
     <a href="#установка-и-запуск">Установка</a> •
     <a href="#инструкция-по-использованию">Инструкция</a> •
+    <a href="CHANGELOG.md">История изменений</a> •
     <a href="#контакты-поддержки">Контакты</a>
 </p>
 
@@ -188,6 +189,8 @@
 <hr>
 
 <h2>📁 Требования к входным файлам</h2>
+
+<p><strong>Важно:</strong> репозиторий содержит только код. Excel-файлы с производственными данными (BP, отчёты, конфигурация, упаковочные листы) <strong>не хранятся в git</strong> и должны быть добавлены в соответствующие подпапки <code>input_files/</code> вручную. Исключение — <code>input_breakpoint_data_files/</code>: накопленная история создаётся программой автоматически.</p>
 
 <p>Перед запуском программы убедитесь, что в рабочей папке присутствуют следующие файлы:</p>
 
@@ -369,10 +372,15 @@
 
 <hr>
 
+<h2>📝 История изменений</h2>
+<p>Полный список изменений по версиям — в файле <a href="CHANGELOG.md"><code>CHANGELOG.md</code></a>.</p>
+
+<hr>
+
 <p align="center">
-    <strong>Версия:</strong> 2.0 &nbsp;|&nbsp;
+    <strong>Версия:</strong> 2.0.1 &nbsp;|&nbsp;
     <strong>Дата создания:</strong> 2026-05-14 &nbsp;|&nbsp;
-    <strong>Дата изменения:</strong> 2026-09-24 &nbsp;|&nbsp;
+    <strong>Дата изменения:</strong> 2026-09-28 &nbsp;|&nbsp;
     <strong>Статус:</strong> Production
 </p>
 
